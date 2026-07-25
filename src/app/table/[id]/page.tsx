@@ -5,7 +5,10 @@ import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import type { DinerProfile } from "@/domain/contracts";
 import { BeliefRevisionPanel } from "@/components/BeliefRevisionPanel";
+import { CheckoutPanel } from "@/components/CheckoutPanel";
 import { DinerRoster } from "@/components/DinerRoster";
+import { FeedbackForm } from "@/components/FeedbackForm";
+import { FulfillmentTimeline } from "@/components/FulfillmentTimeline";
 import { IdentityPicker } from "@/components/IdentityPicker";
 import { RecommendationCard } from "@/components/RecommendationCard";
 import { ShareLink } from "@/components/ShareLink";
@@ -16,8 +19,11 @@ import {
   approveTableRequest,
   fetchAllDiners,
   joinTableRequest,
-  reviseJordanRequest,
+  payTableRequest,
   resetDemo,
+  reviseJordanRequest,
+  startCheckoutRequest,
+  submitFeedbackRequest,
 } from "@/lib/api";
 import {
   clearClaim,
@@ -38,6 +44,7 @@ export default function TablePage() {
   const [allDiners, setAllDiners] = useState<DinerProfile[]>([]);
   const [claiming, setClaiming] = useState(false);
   const [actionBusy, setActionBusy] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
 
   const you = useSyncExternalStore(
     subscribeClaim,
@@ -87,23 +94,32 @@ export default function TablePage() {
 
   const busy = actionBusy || BUSY_PHASES.has(table.phase);
 
-  const correctJordanBelief = async () => {
+  const runAction = async (request: () => Promise<{ error: string | null }>) => {
     setActionBusy(true);
-    await reviseJordanRequest(tableId);
+    setActionError(null);
+    const result = await request();
+    if (result.error) setActionError(result.error);
     setActionBusy(false);
   };
 
-  const approve = async () => {
-    setActionBusy(true);
-    await approveTableRequest(tableId);
-    setActionBusy(false);
-  };
+  const correctJordanBelief = () => runAction(() => reviseJordanRequest(tableId));
+  const approve = () => runAction(() => approveTableRequest(tableId));
+  const startCheckout = () => runAction(() => startCheckoutRequest(tableId));
+  const pay = () => runAction(() => payTableRequest(tableId));
+  const submitFeedback = (liked: boolean, note?: string) =>
+    you ? runAction(() => submitFeedbackRequest(tableId, you, liked, note)) : undefined;
 
   const restart = async () => {
     await resetDemo();
     clearClaim(tableId);
     router.push("/");
   };
+
+  const restaurant = table.recommendation
+    ? demoRestaurants.find((r) => r.id === table.recommendation?.restaurantId)
+    : undefined;
+  const yourSelection = table.recommendation?.selections.find((s) => s.dinerId === you);
+  const yourDish = restaurant?.menu.find((d) => d.id === yourSelection?.dishId) ?? null;
 
   return (
     <main>
@@ -180,7 +196,9 @@ export default function TablePage() {
               </p>
             )}
 
-            {!table.approved ? (
+            {actionError && <p className="checkoutFailed">{actionError}</p>}
+
+            {!table.approved && (
               <div className="actionRow">
                 {you === "jordan" &&
                   table.seatedDinerIds.includes("priya") &&
@@ -203,9 +221,44 @@ export default function TablePage() {
                   Approve & continue
                 </button>
               </div>
-            ) : (
+            )}
+
+            {table.approved && !table.checkout && (
+              <div className="actionRow">
+                <button type="button" className="primaryButton" onClick={startCheckout} disabled={busy}>
+                  Start checkout
+                </button>
+              </div>
+            )}
+
+            {table.checkout && (
+              <CheckoutPanel
+                session={table.checkout}
+                lastResult={table.lastPaymentResult}
+                diners={table.diners}
+                canPay={table.checkout.status === "idle" || table.checkout.status === "failed"}
+                paying={actionBusy}
+                onPay={pay}
+              />
+            )}
+
+            {table.fulfillmentTimeline && <FulfillmentTimeline steps={table.fulfillmentTimeline} />}
+
+            {table.fulfillmentStatus === "completed" && (
+              <FeedbackForm
+                you={you}
+                yourDishName={yourDish?.name ?? null}
+                seatedDinerIds={table.seatedDinerIds}
+                diners={table.diners}
+                feedback={table.feedback}
+                busy={actionBusy}
+                onSubmit={submitFeedback}
+              />
+            )}
+
+            {table.memoryUpdate?.status === "saved" && (
               <div className="freshSessionNote">
-                Approved. Open{" "}
+                Memory updated. Open{" "}
                 <Link href={`/diner/${you}`} target="_blank">
                   your profile in a new tab
                 </Link>{" "}
