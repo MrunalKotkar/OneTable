@@ -1,25 +1,35 @@
 "use client";
 
-import { demoGroupHistory, demoRestaurants } from "@/data/demo-fixtures";
-import { BeliefRevisionPanel } from "@/components/BeliefRevisionPanel";
+import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
+import type { DinerProfile } from "@/domain/contracts";
 import { DinerRoster } from "@/components/DinerRoster";
-import { FreshSessionPanel } from "@/components/FreshSessionPanel";
-import { RecommendationCard } from "@/components/RecommendationCard";
-import { StatusBanner } from "@/components/StatusBanner";
-import { useDemoFlow } from "@/components/use-demo-flow";
-
-const BUSY_PHASES = new Set([
-  "recalling",
-  "negotiating",
-  "revising_belief",
-  "rebalancing",
-]);
+import { createTableRequest, fetchAllDiners, resetDemo } from "@/lib/api";
 
 export default function Home() {
-  const { state, actions } = useDemoFlow();
-  const busy = BUSY_PHASES.has(state.phase);
-  const presentIds = ["alex", "sam", "jordan", ...(state.priyaSelected ? ["priya"] : [])];
-  const jordan = state.diners.find((d) => d.id === "jordan");
+  const router = useRouter();
+  const [diners, setDiners] = useState<DinerProfile[]>([]);
+  const [intent, setIntent] = useState("");
+  const [creating, setCreating] = useState(false);
+
+  useEffect(() => {
+    fetchAllDiners().then(setDiners);
+  }, []);
+
+  const createTable = async () => {
+    setCreating(true);
+    const result = await createTableRequest(intent);
+    if (result) {
+      router.push(`/table/${result.id}`);
+      return;
+    }
+    setCreating(false);
+  };
+
+  const restart = async () => {
+    await resetDemo();
+    setDiners(await fetchAllDiners());
+  };
 
   return (
     <main>
@@ -33,190 +43,69 @@ export default function Home() {
             <span>MenuSifu Track 1</span>
           </div>
         </div>
-        <span className="status">{state.screen.replace("-", " ")}</span>
+        <span className="status">create table</span>
       </header>
 
       <section className="workspace">
-        {state.screen === "create-table" && (
-          <>
-            <div className="intro">
-              <p className="eyebrow">Group dining agent</p>
-              <h1>One table. Current beliefs. One order.</h1>
-              <p>
-                OneTable recalls each diner&apos;s active constraints before it
-                negotiates. Start with Alex, Sam, and Jordan — Priya can join the
-                table once it&apos;s running.
-              </p>
+        <div className="intro">
+          <p className="eyebrow">Group dining agent</p>
+          <h1>One table. Current beliefs. One order.</h1>
+          <p>
+            OneTable recalls each diner&apos;s active constraints before it
+            negotiates. Create a table, then share the link so Alex, Sam,
+            Jordan, and Priya can each join from their own device.
+          </p>
+        </div>
+
+        <section className="panel" aria-labelledby="diners-title">
+          <div className="panelHeading">
+            <div>
+              <p className="eyebrow">Remembered diners</p>
+              <h2 id="diners-title">Who OneTable already knows</h2>
             </div>
+            <span>{diners.length} of 4 loaded</span>
+          </div>
+          <div className="panelBody">
+            <DinerRoster diners={diners} presentIds={[]} />
+          </div>
+        </section>
 
-            <section className="panel" aria-labelledby="diners-title">
-              <div className="panelHeading">
-                <div>
-                  <p className="eyebrow">Create table</p>
-                  <h2 id="diners-title">Who&apos;s at the table</h2>
-                </div>
-                <span>{presentIds.length} of 4 seated</span>
-              </div>
-              <div className="panelBody">
-                <DinerRoster
-                  diners={state.diners}
-                  presentIds={presentIds}
-                  onTogglePriya={actions.togglePriya}
-                />
-              </div>
-            </section>
-
-            <section className="panel" aria-labelledby="intent-title">
-              <div className="panelHeading">
-                <div>
-                  <p className="eyebrow">Dining intent</p>
-                  <h2 id="intent-title">What is the table looking for?</h2>
-                </div>
-              </div>
-              <div className="panelBody">
-                <input
-                  className="intentInput"
-                  type="text"
-                  value={state.intent}
-                  onChange={(event) => actions.setIntent(event.target.value)}
-                  placeholder="quick lunch, around $20 each"
-                  aria-label="Dining intent"
-                />
-                <button
-                  type="button"
-                  className="primaryButton"
-                  onClick={actions.createTable}
-                  disabled={busy}
-                >
-                  {busy ? "Working…" : "Recall & recommend"}
-                </button>
-                {state.phase === "no_feasible_result" && (
-                  <p className="inlineHint">
-                    Try a different intent or table combination, then recall again.
-                  </p>
-                )}
-              </div>
-            </section>
-
-            <StatusBanner
-              phase={state.phase}
-              message={state.errorMessage}
-              onRetry={() => state.pendingAction?.()}
+        <section className="panel" aria-labelledby="intent-title">
+          <div className="panelHeading">
+            <div>
+              <p className="eyebrow">Dining intent</p>
+              <h2 id="intent-title">What is the table looking for?</h2>
+            </div>
+          </div>
+          <div className="panelBody">
+            <input
+              className="intentInput"
+              type="text"
+              value={intent}
+              onChange={(event) => setIntent(event.target.value)}
+              placeholder="quick lunch, around $20 each"
+              aria-label="Dining intent"
             />
-          </>
-        )}
+            <button
+              type="button"
+              className="primaryButton"
+              onClick={createTable}
+              disabled={creating}
+            >
+              {creating ? "Creating…" : "Create table"}
+            </button>
+            <p className="inlineHint">
+              Creates a table for Alex, Sam, and Jordan, and gives you a link to
+              share with Priya so she can join from her own device.
+            </p>
+          </div>
+        </section>
 
-        {state.screen === "table" && (
-          <>
-            <div className="intro intro--compact">
-              <p className="eyebrow">Live table</p>
-              <h1>Recommendation</h1>
-            </div>
-
-            <StatusBanner
-              phase={state.phase}
-              message={state.errorMessage}
-              onRetry={() => state.pendingAction?.()}
-            />
-
-            {state.phase === "no_feasible_result" && (
-              <p className="inlineHint">
-                That change couldn&apos;t produce a safe recommendation, so the
-                table still shows the last valid order below.
-              </p>
-            )}
-
-            <section className="panel" aria-labelledby="roster-title">
-              <div className="panelHeading">
-                <div>
-                  <p className="eyebrow">Table</p>
-                  <h2 id="roster-title">Diners</h2>
-                </div>
-                <span>{presentIds.length} of 4 seated</span>
-              </div>
-              <div className="panelBody">
-                <DinerRoster
-                  diners={state.diners}
-                  presentIds={presentIds}
-                  onTogglePriya={state.priyaSelected ? undefined : actions.addPriya}
-                />
-              </div>
-            </section>
-
-            {state.recommendation && (
-              <RecommendationCard
-                recommendation={state.recommendation}
-                previousRecommendation={state.previousRecommendation}
-                restaurants={demoRestaurants}
-                diners={state.diners}
-              />
-            )}
-
-            {state.revision && jordan && (
-              <BeliefRevisionPanel revision={state.revision} diner={jordan} />
-            )}
-
-            <div className="actionRow">
-              {!state.priyaSelected && (
-                <button
-                  type="button"
-                  className="secondaryButton"
-                  onClick={actions.addPriya}
-                  disabled={busy}
-                >
-                  Add Priya to the table
-                </button>
-              )}
-              {state.priyaSelected && !state.revision && (
-                <button
-                  type="button"
-                  className="secondaryButton"
-                  onClick={actions.reviseJordanBelief}
-                  disabled={busy}
-                >
-                  Jordan: correct to shellfish allergy
-                </button>
-              )}
-              <button
-                type="button"
-                className="primaryButton"
-                onClick={actions.approve}
-                disabled={busy || state.phase !== "ready"}
-              >
-                Approve & continue
-              </button>
-            </div>
-          </>
-        )}
-
-        {state.screen === "fresh-session" && (
-          <>
-            <div className="intro intro--compact">
-              <p className="eyebrow">New browser session</p>
-              <h1>Fresh-session proof</h1>
-            </div>
-
-            <StatusBanner
-              phase={state.phase}
-              message={state.errorMessage}
-              onRetry={() => state.pendingAction?.()}
-            />
-
-            {state.phase === "ready" && (
-              <FreshSessionPanel
-                diners={state.diners}
-                history={demoGroupHistory}
-                revision={state.revision}
-              />
-            )}
-
-            <div className="actionRow">
-              <button type="button" className="secondaryButton" onClick={actions.restart}>
-                Restart demo
-              </button>
-            </div>
-          </>
-        )}
+        <div className="actionRow">
+          <button type="button" className="secondaryButton" onClick={restart}>
+            Restart demo
+          </button>
+        </div>
       </section>
     </main>
   );
