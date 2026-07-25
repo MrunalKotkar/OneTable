@@ -1,9 +1,27 @@
 import type { DinerProfile, GroupMealSummary } from "@/domain/contracts";
 import type { TableSnapshot } from "@/server/table-store";
 
+export interface ActionResult {
+  table: TableSnapshot | null;
+  error: string | null;
+}
+
 async function parseOrNull<T>(res: Response): Promise<T | null> {
   if (!res.ok) return null;
   return (await res.json()) as T;
+}
+
+async function postAction(url: string, body?: unknown): Promise<ActionResult> {
+  const res = await fetch(url, {
+    method: "POST",
+    headers: body ? { "Content-Type": "application/json" } : undefined,
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  const data = await res.json().catch(() => null);
+  if (!res.ok) {
+    return { table: null, error: data?.message ?? "Request failed." };
+  }
+  return { table: data as TableSnapshot, error: null };
 }
 
 export async function createTableRequest(intent: string): Promise<{ id: string } | null> {
@@ -20,26 +38,33 @@ export async function fetchTable(id: string): Promise<TableSnapshot | null> {
   return parseOrNull(res);
 }
 
-export async function joinTableRequest(
+export async function joinTableRequest(id: string, dinerId: string): Promise<ActionResult> {
+  return postAction(`/api/tables/${id}/join`, { dinerId });
+}
+
+export async function reviseJordanRequest(id: string): Promise<ActionResult> {
+  return postAction(`/api/tables/${id}/revise-belief`);
+}
+
+export async function approveTableRequest(id: string): Promise<ActionResult> {
+  return postAction(`/api/tables/${id}/approve`);
+}
+
+export async function startCheckoutRequest(id: string): Promise<ActionResult> {
+  return postAction(`/api/tables/${id}/checkout`);
+}
+
+export async function payTableRequest(id: string, forceFailure = false): Promise<ActionResult> {
+  return postAction(`/api/tables/${id}/pay`, { forceFailure });
+}
+
+export async function submitFeedbackRequest(
   id: string,
   dinerId: string,
-): Promise<TableSnapshot | null> {
-  const res = await fetch(`/api/tables/${id}/join`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ dinerId }),
-  });
-  return parseOrNull(res);
-}
-
-export async function reviseJordanRequest(id: string): Promise<TableSnapshot | null> {
-  const res = await fetch(`/api/tables/${id}/revise-belief`, { method: "POST" });
-  return parseOrNull(res);
-}
-
-export async function approveTableRequest(id: string): Promise<TableSnapshot | null> {
-  const res = await fetch(`/api/tables/${id}/approve`, { method: "POST" });
-  return parseOrNull(res);
+  liked: boolean,
+  note?: string,
+): Promise<ActionResult> {
+  return postAction(`/api/tables/${id}/feedback`, { dinerId, liked, note });
 }
 
 export async function fetchAllDiners(): Promise<DinerProfile[]> {
