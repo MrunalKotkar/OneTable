@@ -13,5 +13,5 @@ export async function POST(
     const status = result.reason === "Table not found." ? 404 : 409;
     return NextResponse.json({ error: "cannot_pay", message: result.reason }, { status });
   }
-  return NextResponse.json(getTable(id));
+  return NextResponse.json(await getTable(id));
 }

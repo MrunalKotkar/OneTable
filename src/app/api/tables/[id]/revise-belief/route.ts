@@ -10,5 +10,5 @@ export async function POST(
   if (!table) {
     return NextResponse.json({ error: "not_found" }, { status: 404 });
   }
-  return NextResponse.json(getTable(id));
+  return NextResponse.json(await getTable(id));
 }

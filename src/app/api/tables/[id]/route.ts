@@ -6,7 +6,7 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> },
 ) {
   const { id } = await params;
-  const table = getTable(id);
+  const table = await getTable(id);
   if (!table) {
     return NextResponse.json({ error: "not_found" }, { status: 404 });
   }

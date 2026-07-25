@@ -11,10 +11,10 @@ export async function POST(
   const liked = body?.liked === true;
   const note = typeof body?.note === "string" && body.note.length > 0 ? body.note : undefined;
 
-  const result = submitFeedback(id, dinerId, liked, note);
+  const result = await submitFeedback(id, dinerId, liked, note);
   if (!result.ok) {
     const status = result.reason === "Table not found." ? 404 : 409;
     return NextResponse.json({ error: "cannot_submit_feedback", message: result.reason }, { status });
   }
-  return NextResponse.json(getTable(id));
+  return NextResponse.json(await getTable(id));
 }

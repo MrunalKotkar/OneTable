@@ -6,9 +6,9 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> },
 ) {
   const { id } = await params;
-  const diner = getDinerProfile(id);
+  const diner = await getDinerProfile(id);
   if (!diner) {
     return NextResponse.json({ error: "not_found" }, { status: 404 });
   }
-  return NextResponse.json({ diner, history: getGroupHistory() });
+  return NextResponse.json({ diner, history: await getGroupHistory() });
 }
