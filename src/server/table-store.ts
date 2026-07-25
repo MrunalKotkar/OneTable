@@ -5,16 +5,11 @@ import type {
   FulfillmentStatus,
   GroupMealSummary,
   Recommendation,
+  Restaurant,
 } from "@/domain/contracts";
-import {
-  buildJordanRevision,
-  demoDiners,
-  demoGroupHistory,
-  demoRestaurants,
-  recommendationV1,
-  recommendationV2,
-  recommendationV3,
-} from "@/data/demo-fixtures";
+import { demoRestaurants as restaurantCatalog } from "@/data/restaurant-catalog";
+import { memoryGateway, resetStore } from "@/features/memory";
+import { RuleBasedNegotiationEngine } from "@/features/negotiation/engine";
 import type { Phase } from "@/lib/phase";
 import type { CheckoutResult, CheckoutSession } from "@/features/checkout/contract";
 import { createCheckoutSession, simulatePayment } from "@/features/checkout/simulator";
@@ -26,18 +21,26 @@ import {
 } from "@/features/fulfillment/simulator";
 
 /**
- * Stand-in shared backend for the hackathon demo: an in-memory store on
- * the Next.js server process. This is what makes "share a table link and
- * have someone else join from their own device" possible at all, since
- * plain client-side React state can't be seen across devices.
+ * Server-side table state, now backed by the real MemoryGateway (Person 1)
+ * and NegotiationEngine (Person 2) instead of fixed fixtures. What remains
+ * a stand-in here is only the *table* concept itself (a shareable link with
+ * seated diners, phase timing, checkout/fulfillment/feedback) — an
+ * in-memory Map on the Next.js server process, lost on restart and unsafe
+ * across multiple instances. Diner beliefs and meal history now live in
+ * `@/features/memory`'s own store, not here.
  *
- * This is NOT Person 1's MemoryGateway or Person 2's NegotiationEngine —
- * it is a temporary, single-process, non-persistent stand-in (state is
- * lost on server restart, and this will misbehave if the app is ever
- * deployed across multiple server instances). It exists only so the
- * multi-device join/negotiate/revise story can be demoed end to end
- * before those real features exist.
+ * All tables recall against the SAME persistent group id (GROUP_ID), not
+ * the table's own (per-link, freshly random) id. The table id is just this
+ * browser session's shareable link; the group is the recurring
+ * Alex/Sam/Jordan/Priya cast whose beliefs and meal history are meant to
+ * persist across separate sittings — that is what makes group history and
+ * the fresh-session proof genuine rather than reset-per-link.
  */
+
+const GROUP_ID = "demo-group";
+const ALL_DINER_IDS = ["alex", "sam", "jordan", "priya"];
+
+const negotiationEngine = new RuleBasedNegotiationEngine();
 
 export interface TableState {
   id: string;
@@ -63,26 +66,7 @@ export interface TableSnapshot extends TableState {
   fulfillmentTimeline: FulfillmentStep[] | null;
 }
 
-const diners = new Map<string, DinerProfile>();
 const tables = new Map<string, TableState>();
-let groupHistory: GroupMealSummary[] = [];
-
-function seedDiners(): void {
-  diners.clear();
-  for (const diner of demoDiners) {
-    diners.set(diner.id, {
-      ...diner,
-      beliefs: diner.beliefs.map((belief) => ({ ...belief })),
-    });
-  }
-}
-
-function seedHistory(): void {
-  groupHistory = demoGroupHistory.map((meal) => ({ ...meal }));
-}
-
-seedDiners();
-seedHistory();
 
 function makeTableId(): string {
   return Math.random().toString(36).slice(2, 8).toUpperCase();
@@ -97,8 +81,74 @@ function schedule(id: string, delayMs: number, mutate: (table: TableState) => vo
   }, delayMs);
 }
 
-function resolveDiners(ids: string[]): DinerProfile[] {
-  return ids.map((id) => diners.get(id)).filter((d): d is DinerProfile => Boolean(d));
+/** Same as `schedule`, but for a mutation that itself needs to await the gateway/engine. */
+function scheduleAsync(
+  id: string,
+  delayMs: number,
+  run: (table: TableState) => Promise<void>,
+): void {
+  setTimeout(() => {
+    const table = tables.get(id);
+    if (!table) return;
+    run(table)
+      .catch((error: unknown) => {
+        // Backstop only — runRebalance and reviseJordanBelief already turn
+        // expected failures into phase/errorMessage themselves.
+        table.phase = "error";
+        table.errorMessage = error instanceof Error ? error.message : "Something went wrong.";
+      })
+      .finally(() => {
+        table.updatedAt = Date.now();
+      });
+  }, delayMs);
+}
+
+function restaurantById(id: string): Restaurant | null {
+  return restaurantCatalog.find((r) => r.id === id) ?? null;
+}
+
+function restaurantFor(recommendation: Recommendation): Restaurant | null {
+  return restaurantById(recommendation.restaurantId);
+}
+
+/**
+ * The one rebalance path, per docs/TEAM_PLAN.md: both "a diner joined" and
+ * "a belief was revised" just mean "recall fresh context, re-run
+ * negotiation, diff against the previous version." Recalls only active
+ * beliefs (the gateway's guarantee) and lets the negotiation engine's own
+ * NoFeasibleRestaurantError (checked by name, not `instanceof` — see note
+ * below) become the explicit "no feasible result" phase rather than
+ * fabricating a recommendation.
+ */
+async function runRebalance(table: TableState): Promise<void> {
+  try {
+    const context = await memoryGateway.recallGroupContext(
+      GROUP_ID,
+      table.seatedDinerIds,
+      table.intent,
+    );
+    const recommendation = await negotiationEngine.rebalance({
+      context,
+      restaurants: restaurantCatalog,
+      previousRecommendation: table.recommendation ?? undefined,
+    });
+    table.previousRecommendation = table.recommendation;
+    table.recommendation = recommendation;
+    table.phase = "ready";
+    table.errorMessage = null;
+  } catch (error) {
+    // Person 2's engine (src/features/negotiation/engine.ts) throws its own
+    // NoFeasibleRestaurantError, a *different class* than the same-named one
+    // Person 4 added to negotiation/contract.ts. Checking by `.name` instead
+    // of `instanceof` works no matter which of the two ever ends up thrown.
+    if (error instanceof Error && error.name === "NoFeasibleRestaurantError") {
+      table.phase = "no_feasible_result";
+      table.errorMessage = error.message;
+    } else {
+      table.phase = "error";
+      table.errorMessage = error instanceof Error ? error.message : "Something went wrong.";
+    }
+  }
 }
 
 export function createTable(intent: string): TableState {
@@ -126,51 +176,46 @@ export function createTable(intent: string): TableState {
   schedule(id, 600, (t) => {
     t.phase = "negotiating";
   });
-  schedule(id, 1300, (t) => {
-    t.recommendation = { ...recommendationV1, changes: [] };
-    t.phase = "ready";
-  });
+  scheduleAsync(id, 1300, (t) => runRebalance(t));
 
   return table;
 }
 
 /**
  * A diner opens the shared link and claims their seat. Idempotent for
- * diners already seated. Only Priya joining after the first
- * recommendation triggers the scripted rebalance (v1 -> v2) — this
- * mirrors docs/TEAM_PLAN.md's "Priya joins" story, which is the only
- * membership change the fixed fixtures model.
+ * diners already seated. Any join that happens after a recommendation
+ * already exists triggers the same rebalance path used for a belief
+ * revision — there is nothing Priya-specific about it now that a real
+ * engine computes the recommendation for whichever diners are seated.
  */
 export function joinTable(id: string, dinerId: string): TableState | null {
   const table = tables.get(id);
   if (!table) return null;
   if (table.approved) return table;
-  if (!diners.has(dinerId)) return table;
+  if (!ALL_DINER_IDS.includes(dinerId)) return table;
   if (table.seatedDinerIds.includes(dinerId)) return table;
 
+  const shouldRebalance = table.recommendation !== null;
   table.seatedDinerIds = [...table.seatedDinerIds, dinerId];
   table.updatedAt = Date.now();
 
-  if (dinerId === "priya" && table.recommendation?.version === 1) {
+  if (shouldRebalance) {
     table.phase = "recalling";
     schedule(id, 400, (t) => {
       t.phase = "rebalancing";
     });
-    schedule(id, 1050, (t) => {
-      t.previousRecommendation = t.recommendation;
-      t.recommendation = recommendationV2;
-      t.phase = "ready";
-    });
+    scheduleAsync(id, 1050, (t) => runRebalance(t));
   }
 
   return table;
 }
 
 /**
- * Jordan corrects his own belief from his own device. Updates the
- * shared diner record (so it persists for anyone who looks him up
- * later, independent of this table) and triggers the scripted
- * rebalance to v3.
+ * Jordan corrects his own belief from his own device. The revision is
+ * written through the real MemoryGateway (so it persists independent of
+ * this table, and the previous/current pair for the audit UI comes
+ * straight from the gateway's own supersession logic), then the same
+ * rebalance path re-runs.
  */
 export function reviseJordanBelief(id: string): TableState | null {
   const table = tables.get(id);
@@ -182,11 +227,13 @@ export function reviseJordanBelief(id: string): TableState | null {
   table.phase = "revising_belief";
   table.updatedAt = Date.now();
 
-  schedule(id, 550, (t) => {
-    const revision = buildJordanRevision(new Date().toISOString());
-    diners.set("jordan", {
-      ...diners.get("jordan")!,
-      beliefs: [{ ...revision.previous }, { ...revision.current }],
+  scheduleAsync(id, 550, async (t) => {
+    const revision = await memoryGateway.reviseBelief({
+      dinerId: "jordan",
+      sessionId: id,
+      kind: "allergy",
+      value: "shellfish",
+      correctionText: "Actually I'm allergic to shellfish.",
     });
     t.revision = revision;
     t.phase = "recalling";
@@ -194,11 +241,7 @@ export function reviseJordanBelief(id: string): TableState | null {
   schedule(id, 950, (t) => {
     t.phase = "rebalancing";
   });
-  schedule(id, 1600, (t) => {
-    t.previousRecommendation = t.recommendation;
-    t.recommendation = recommendationV3;
-    t.phase = "ready";
-  });
+  scheduleAsync(id, 1600, (t) => runRebalance(t));
 
   return table;
 }
@@ -220,10 +263,6 @@ export function approveTable(id: string): { ok: true; table: TableState } | { ok
   table.approvedVersion = table.recommendation.version;
   table.updatedAt = Date.now();
   return { ok: true, table };
-}
-
-function restaurantFor(recommendation: Recommendation) {
-  return demoRestaurants.find((r) => r.id === recommendation.restaurantId) ?? null;
 }
 
 /**
@@ -289,10 +328,6 @@ export function payForTable(
   const alreadySettled = table.checkout.status === "paid" || table.checkout.status === "processing";
 
   if (alreadySettled) {
-    // Duplicate/late attempt on a session that already reflects the true
-    // state: report the rejection synchronously and leave the stored
-    // session completely untouched — never route this through the
-    // "processing" mutation below, which would otherwise stamp over it.
     const transition = simulatePayment({ session: table.checkout });
     table.lastPaymentResult = transition.result;
     table.updatedAt = Date.now();
@@ -335,18 +370,20 @@ export function payForTable(
 }
 
 /**
- * One diner submits their own feedback. Only allowed once fulfillment
- * has completed. Once every seated diner has responded, builds the
- * MealOutcome and writes it back into shared memory: appended to group
- * history and to each diner's own pastOrders, so a later fresh-session
- * lookup actually reflects it.
+ * One diner submits their own feedback. Only allowed once fulfillment has
+ * completed. Once every seated diner has responded, builds the
+ * MealOutcome and writes it back through the real MemoryGateway (scoped
+ * to the persistent GROUP_ID, not this table's own id) — so a later
+ * fresh-session lookup, or even a brand-new table with the same group,
+ * genuinely reflects it. This is async because the plan requires waiting
+ * for confirmed save before showing "memory updated."
  */
-export function submitFeedback(
+export async function submitFeedback(
   id: string,
   dinerId: string,
   liked: boolean,
   note?: string,
-): { ok: true; table: TableState } | { ok: false; reason: string } {
+): Promise<{ ok: true; table: TableState } | { ok: false; reason: string }> {
   const table = tables.get(id);
   if (!table) return { ok: false, reason: "Table not found." };
   if (table.fulfillmentStatus !== "completed") {
@@ -369,38 +406,24 @@ export function submitFeedback(
   if (allResponded && table.recommendation && !table.memoryUpdate) {
     const completedAt = new Date().toISOString();
     const outcome = buildMealOutcome({
-      groupId: id,
+      groupId: GROUP_ID,
       recommendation: table.recommendation,
       feedback: table.feedback,
       completedAt,
       currentStatus: table.fulfillmentStatus,
     });
+    await memoryGateway.saveMealOutcome(outcome);
     table.memoryUpdate = confirmFeedbackMemoryUpdate({ outcome, savedAt: completedAt });
-
-    const restaurant = restaurantFor(table.recommendation);
-    if (restaurant) {
-      const likedCount = table.feedback.filter((f) => f.liked).length;
-      const rating = Math.max(1, Math.round((likedCount / table.feedback.length) * 5));
-      groupHistory = [...groupHistory, { restaurant: restaurant.name, occurredAt: completedAt, rating }];
-
-      for (const entry of table.feedback) {
-        const diner = diners.get(entry.dinerId);
-        const dish = restaurant.menu.find((d) => d.id === entry.dishId);
-        if (!diner || !dish) continue;
-        diners.set(entry.dinerId, {
-          ...diner,
-          pastOrders: [...diner.pastOrders, { restaurant: restaurant.name, dish: dish.name, liked: entry.liked }],
-        });
-      }
-    }
+    table.updatedAt = Date.now();
   }
 
   return { ok: true, table };
 }
 
-export function getTable(id: string): TableSnapshot | null {
+export async function getTable(id: string): Promise<TableSnapshot | null> {
   const table = tables.get(id);
   if (!table) return null;
+  const context = await memoryGateway.recallGroupContext(GROUP_ID, table.seatedDinerIds, table.intent);
   const restaurant = table.recommendation ? restaurantFor(table.recommendation) : null;
   const fulfillmentTimeline =
     table.recommendation && restaurant && table.fulfillmentStatus
@@ -408,26 +431,36 @@ export function getTable(id: string): TableSnapshot | null {
       : null;
   return {
     ...table,
-    diners: resolveDiners(table.seatedDinerIds),
+    diners: context.diners,
     fulfillmentTimeline,
   };
 }
 
-export function getAllDinerProfiles(): DinerProfile[] {
-  return demoDiners.map((seed) => diners.get(seed.id) ?? seed);
+export async function getAllDinerProfiles(): Promise<DinerProfile[]> {
+  const context = await memoryGateway.recallGroupContext(GROUP_ID, ALL_DINER_IDS, "");
+  return context.diners;
 }
 
-export function getDinerProfile(id: string): DinerProfile | null {
-  return diners.get(id) ?? null;
+export async function getDinerProfile(id: string): Promise<DinerProfile | null> {
+  const context = await memoryGateway.recallGroupContext(GROUP_ID, [id], "");
+  return context.diners[0] ?? null;
 }
 
-export function getGroupHistory(): GroupMealSummary[] {
-  return groupHistory;
+/**
+ * The mock gateway's recall stores each meal's restaurant as its id (see
+ * mock-gateway.ts's `restaurant: o.restaurantId`), not a display name.
+ * Resolved here against the catalog for anything rendering this list.
+ */
+export async function getGroupHistory(): Promise<GroupMealSummary[]> {
+  const context = await memoryGateway.recallGroupContext(GROUP_ID, ALL_DINER_IDS, "");
+  return context.history.map((meal) => ({
+    ...meal,
+    restaurant: restaurantById(meal.restaurant)?.name ?? meal.restaurant,
+  }));
 }
 
-/** Demo-rehearsal reset: clears every table and restores seed beliefs. */
+/** Demo-rehearsal reset: clears every table and restores seed beliefs/history. */
 export function resetAll(): void {
-  seedDiners();
-  seedHistory();
+  resetStore();
   tables.clear();
 }
