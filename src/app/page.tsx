@@ -90,10 +90,19 @@ export default function Home() {
                 >
                   {busy ? "Working…" : "Recall & recommend"}
                 </button>
+                {state.phase === "no_feasible_result" && (
+                  <p className="inlineHint">
+                    Try a different intent or table combination, then recall again.
+                  </p>
+                )}
               </div>
             </section>
 
-            <StatusBanner phase={state.phase} />
+            <StatusBanner
+              phase={state.phase}
+              message={state.errorMessage}
+              onRetry={() => state.pendingAction?.()}
+            />
           </>
         )}
 
@@ -104,7 +113,18 @@ export default function Home() {
               <h1>Recommendation</h1>
             </div>
 
-            <StatusBanner phase={state.phase} />
+            <StatusBanner
+              phase={state.phase}
+              message={state.errorMessage}
+              onRetry={() => state.pendingAction?.()}
+            />
+
+            {state.phase === "no_feasible_result" && (
+              <p className="inlineHint">
+                That change couldn&apos;t produce a safe recommendation, so the
+                table still shows the last valid order below.
+              </p>
+            )}
 
             <section className="panel" aria-labelledby="roster-title">
               <div className="panelHeading">
@@ -176,7 +196,11 @@ export default function Home() {
               <h1>Fresh-session proof</h1>
             </div>
 
-            <StatusBanner phase={state.phase} />
+            <StatusBanner
+              phase={state.phase}
+              message={state.errorMessage}
+              onRetry={() => state.pendingAction?.()}
+            />
 
             {state.phase === "ready" && (
               <FreshSessionPanel

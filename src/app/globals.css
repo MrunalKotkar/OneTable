@@ -387,6 +387,12 @@ h1 {
   gap: 12px;
 }
 
+.inlineHint {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
 /* Recommendation card */
 
 .recommendationCard {
