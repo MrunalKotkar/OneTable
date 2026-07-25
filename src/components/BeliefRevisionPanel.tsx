@@ -1,5 +1,5 @@
 import type { BeliefRevision, DinerProfile } from "@/domain/contracts";
-import { beliefLabel } from "./lib/compatibility";
+import { beliefLabel } from "@/lib/compatibility";
 
 interface BeliefRevisionPanelProps {
   revision: BeliefRevision;

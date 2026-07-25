@@ -1,5 +1,5 @@
 import type { DinerProfile, Recommendation, Restaurant } from "@/domain/contracts";
-import { checkDishAgainstDiner } from "./lib/compatibility";
+import { checkDishAgainstDiner } from "@/lib/compatibility";
 
 interface RecommendationCardProps {
   recommendation: Recommendation;

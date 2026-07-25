@@ -1,4 +1,4 @@
-import type { Phase } from "./use-demo-flow";
+import type { Phase } from "@/lib/phase";
 
 interface StatusBannerProps {
   phase: Phase;

@@ -1,5 +1,5 @@
 import type { BeliefRevision, DinerProfile, GroupMealSummary } from "@/domain/contracts";
-import { activeBeliefs, beliefLabel } from "./lib/compatibility";
+import { activeBeliefs, beliefLabel } from "@/lib/compatibility";
 
 interface FreshSessionPanelProps {
   diners: DinerProfile[];
