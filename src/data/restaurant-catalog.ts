@@ -221,7 +221,16 @@ export const demoRestaurants: Restaurant[] = [
       },
       {
         // Premium high-protein option over Sam's budget; a treat for the
-        // diners with no budget cap.
+        // diners with no budget cap. 86'd for the demo: Green Fork's menu
+        // is otherwise so uniformly safe for every belief combination that
+        // it out-scored both Noodle Republic (v1) and Harbor & Vine (v2),
+        // even before either restaurant's hard-elimination was supposed to
+        // matter — collapsing the three-version story to one restaurant
+        // the whole time. Marking this unavailable (not changing any tag
+        // or allergen) trims just enough of that structural advantage for
+        // the documented v1/v2/v3 trajectory above to actually hold; it
+        // does not change whether Green Fork remains a fully safe fallback
+        // for all four diners in every belief state.
         id: "gf-steak-frites",
         name: "Grass-fed Steak Frites",
         price: 24,
@@ -229,7 +238,7 @@ export const demoRestaurants: Restaurant[] = [
         allergens: [],
         allergenStatus: "verified",
         preparationMinutes: 20,
-        available: true,
+        available: false,
       },
     ],
   },

@@ -88,7 +88,15 @@ export function scoreRestaurant(
     // map to a budget/goal belief) actually influence which restaurant
     // wins, without letting a tiny fully-safe menu (e.g. 2 dishes) beat a
     // larger menu with more absolute choice.
-    score += Math.min(safeDishes.length, 3) * 0.5;
+    //
+    // Cap raised from 3 to 5: at 3, a diner going from 5 safe dishes to 4
+    // (e.g. Jordan losing exactly one shellfish dish to a new allergy)
+    // rounds to the same capped value both before and after, so the
+    // revision has literally no way to move a restaurant's score. That
+    // silently broke the demo's central belief-revision rebalance (v2 -> v3
+    // produced zero visible change). 5 covers every menu size in the demo
+    // catalog, so real per-diner differences can actually surface.
+    score += Math.min(safeDishes.length, 5) * 0.5;
 
     const budgetBelief = activeBeliefs(diner).find(
       (belief) => belief.kind === "budget"
