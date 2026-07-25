@@ -1,5 +1,16 @@
 import type { DinerProfile } from "@/domain/contracts";
 
+/**
+ * Seed diner identities for the demo group (Alex, Sam, Jordan, Priya).
+ *
+ * This is now consumed by `src/features/memory/store.ts` as the real
+ * MemoryGateway's initial state — it is no longer a Person 3 stand-in for
+ * memory/negotiation output. Recommendations are computed live by the real
+ * NegotiationEngine (`@/features/negotiation/engine`) against context
+ * recalled from the real MemoryGateway (`@/features/memory`), using the
+ * restaurant catalog in `@/data/restaurant-catalog`.
+ */
+
 export const demoDiners: DinerProfile[] = [
   {
     id: "alex",
@@ -74,4 +85,3 @@ export const demoDiners: DinerProfile[] = [
     pastOrders: [],
   },
 ];
-

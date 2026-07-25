@@ -1,29 +1,36 @@
-import { demoDiners } from "@/data/demo-fixtures";
+"use client";
 
-const workstreams = [
-  {
-    person: "Person 1",
-    title: "Memory",
-    detail: "Recall, revision history, and persistence",
-  },
-  {
-    person: "Person 2",
-    title: "Negotiation",
-    detail: "Constraint filtering and reusable rebalance",
-  },
-  {
-    person: "Person 3",
-    title: "Experience",
-    detail: "Table creation and visible live changes",
-  },
-  {
-    person: "Person 4",
-    title: "Transaction",
-    detail: "Checkout, fulfillment, QA, and demo",
-  },
-];
+import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
+import type { DinerProfile } from "@/domain/contracts";
+import { DinerRoster } from "@/components/DinerRoster";
+import { createTableRequest, fetchAllDiners, resetDemo } from "@/lib/api";
 
 export default function Home() {
+  const router = useRouter();
+  const [diners, setDiners] = useState<DinerProfile[]>([]);
+  const [intent, setIntent] = useState("");
+  const [creating, setCreating] = useState(false);
+
+  useEffect(() => {
+    fetchAllDiners().then(setDiners);
+  }, []);
+
+  const createTable = async () => {
+    setCreating(true);
+    const result = await createTableRequest(intent);
+    if (result) {
+      router.push(`/table/${result.id}`);
+      return;
+    }
+    setCreating(false);
+  };
+
+  const restart = async () => {
+    await resetDemo();
+    setDiners(await fetchAllDiners());
+  };
+
   return (
     <main>
       <header className="topbar">
@@ -36,7 +43,7 @@ export default function Home() {
             <span>MenuSifu Track 1</span>
           </div>
         </div>
-        <span className="status">Boilerplate ready</span>
+        <span className="status">create table</span>
       </header>
 
       <section className="workspace">
@@ -44,54 +51,62 @@ export default function Home() {
           <p className="eyebrow">Group dining agent</p>
           <h1>One table. Current beliefs. One order.</h1>
           <p>
-            The shared contracts and feature boundaries are ready. Each teammate
-            can now build independently against deterministic fixtures.
+            OneTable recalls each diner&apos;s active constraints before it
+            negotiates. Create a table, then share the link so Alex, Sam,
+            Jordan, and Priya can each join from their own device.
           </p>
         </div>
 
         <section className="panel" aria-labelledby="diners-title">
           <div className="panelHeading">
             <div>
-              <p className="eyebrow">Demo table</p>
-              <h2 id="diners-title">Diner profiles</h2>
+              <p className="eyebrow">Remembered diners</p>
+              <h2 id="diners-title">Who OneTable already knows</h2>
             </div>
-            <span>4 profiles seeded</span>
+            <span>{diners.length} of 4 loaded</span>
           </div>
-          <div className="dinerGrid">
-            {demoDiners.map((diner) => (
-              <article className="diner" key={diner.id}>
-                <span className="avatar">{diner.initials}</span>
-                <div>
-                  <h3>{diner.name}</h3>
-                  <p>
-                    {diner.beliefs
-                      .filter((belief) => belief.status === "active")
-                      .map((belief) => String(belief.value))
-                      .join(" · ")}
-                  </p>
-                </div>
-              </article>
-            ))}
+          <div className="panelBody">
+            <DinerRoster diners={diners} presentIds={[]} />
           </div>
         </section>
 
-        <section className="workstreams" aria-labelledby="workstreams-title">
-          <div className="sectionHeading">
-            <p className="eyebrow">Parallel ownership</p>
-            <h2 id="workstreams-title">Four independent workstreams</h2>
+        <section className="panel" aria-labelledby="intent-title">
+          <div className="panelHeading">
+            <div>
+              <p className="eyebrow">Dining intent</p>
+              <h2 id="intent-title">What is the table looking for?</h2>
+            </div>
           </div>
-          <div className="streamGrid">
-            {workstreams.map((stream) => (
-              <article className="stream" key={stream.person}>
-                <span>{stream.person}</span>
-                <h3>{stream.title}</h3>
-                <p>{stream.detail}</p>
-              </article>
-            ))}
+          <div className="panelBody">
+            <input
+              className="intentInput"
+              type="text"
+              value={intent}
+              onChange={(event) => setIntent(event.target.value)}
+              placeholder="quick lunch, around $20 each"
+              aria-label="Dining intent"
+            />
+            <button
+              type="button"
+              className="primaryButton"
+              onClick={createTable}
+              disabled={creating}
+            >
+              {creating ? "Creating…" : "Create table"}
+            </button>
+            <p className="inlineHint">
+              Creates a table for Alex, Sam, and Jordan, and gives you a link to
+              share with Priya so she can join from her own device.
+            </p>
           </div>
         </section>
+
+        <div className="actionRow">
+          <button type="button" className="secondaryButton" onClick={restart}>
+            Restart demo
+          </button>
+        </div>
       </section>
     </main>
   );
 }
-

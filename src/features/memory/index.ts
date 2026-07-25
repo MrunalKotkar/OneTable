@@ -1,6 +1,6 @@
-import type { MemoryGateway } from "./contract";
 import { mockMemoryGateway } from "./mock-gateway";
 import { xtraceMemoryGateway } from "./xtrace-gateway";
+import type { MemoryGateway } from "./contract";
 
 export type { MemoryGateway, ReviseBeliefInput } from "./contract";
 export { mockMemoryGateway } from "./mock-gateway";
@@ -21,3 +21,5 @@ export function selectMemoryGateway(): MemoryGateway {
   }
   return mockMemoryGateway;
 }
+
+export const memoryGateway: MemoryGateway = selectMemoryGateway();
