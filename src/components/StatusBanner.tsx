@@ -2,6 +2,8 @@ import type { Phase } from "./use-demo-flow";
 
 interface StatusBannerProps {
   phase: Phase;
+  /** Specific reason from the failed attempt, when there is one. */
+  message?: string | null;
   onRetry?: () => void;
 }
 
@@ -19,9 +21,11 @@ const COPY: Record<Phase, { label: string; tone: string } | null> = {
   error: { label: "The memory service didn't respond.", tone: "danger" },
 };
 
-export function StatusBanner({ phase, onRetry }: StatusBannerProps) {
+export function StatusBanner({ phase, message, onRetry }: StatusBannerProps) {
   const copy = COPY[phase];
   if (!copy) return null;
+
+  const showsMessage = phase === "no_feasible_result" || phase === "error";
 
   return (
     <div className={`statusBanner statusBanner--${copy.tone}`} role="status">
@@ -29,7 +33,7 @@ export function StatusBanner({ phase, onRetry }: StatusBannerProps) {
         phase === "negotiating" ||
         phase === "revising_belief" ||
         phase === "rebalancing") && <span className="statusSpinner" aria-hidden="true" />}
-      <span>{copy.label}</span>
+      <span>{showsMessage && message ? message : copy.label}</span>
       {phase === "error" && onRetry && (
         <button type="button" className="statusRetry" onClick={onRetry}>
           Retry
