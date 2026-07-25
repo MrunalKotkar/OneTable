@@ -7,7 +7,8 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint .",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "verify:memory": "npx --yes tsx@4 --tsconfig tsconfig.json src/features/memory/verify.ts"
   },
   "dependencies": {
     "next": "16.2.11",
