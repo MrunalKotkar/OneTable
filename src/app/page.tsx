@@ -1,29 +1,26 @@
-import { demoDiners } from "@/data/demo-fixtures";
+"use client";
 
-const workstreams = [
-  {
-    person: "Person 1",
-    title: "Memory",
-    detail: "Recall, revision history, and persistence",
-  },
-  {
-    person: "Person 2",
-    title: "Negotiation",
-    detail: "Constraint filtering and reusable rebalance",
-  },
-  {
-    person: "Person 3",
-    title: "Experience",
-    detail: "Table creation and visible live changes",
-  },
-  {
-    person: "Person 4",
-    title: "Transaction",
-    detail: "Checkout, fulfillment, QA, and demo",
-  },
-];
+import { demoGroupHistory, demoRestaurants } from "@/data/demo-fixtures";
+import { BeliefRevisionPanel } from "@/components/BeliefRevisionPanel";
+import { DinerRoster } from "@/components/DinerRoster";
+import { FreshSessionPanel } from "@/components/FreshSessionPanel";
+import { RecommendationCard } from "@/components/RecommendationCard";
+import { StatusBanner } from "@/components/StatusBanner";
+import { useDemoFlow } from "@/components/use-demo-flow";
+
+const BUSY_PHASES = new Set([
+  "recalling",
+  "negotiating",
+  "revising_belief",
+  "rebalancing",
+]);
 
 export default function Home() {
+  const { state, actions } = useDemoFlow();
+  const busy = BUSY_PHASES.has(state.phase);
+  const presentIds = ["alex", "sam", "jordan", ...(state.priyaSelected ? ["priya"] : [])];
+  const jordan = state.diners.find((d) => d.id === "jordan");
+
   return (
     <main>
       <header className="topbar">
@@ -36,62 +33,167 @@ export default function Home() {
             <span>MenuSifu Track 1</span>
           </div>
         </div>
-        <span className="status">Boilerplate ready</span>
+        <span className="status">{state.screen.replace("-", " ")}</span>
       </header>
 
       <section className="workspace">
-        <div className="intro">
-          <p className="eyebrow">Group dining agent</p>
-          <h1>One table. Current beliefs. One order.</h1>
-          <p>
-            The shared contracts and feature boundaries are ready. Each teammate
-            can now build independently against deterministic fixtures.
-          </p>
-        </div>
-
-        <section className="panel" aria-labelledby="diners-title">
-          <div className="panelHeading">
-            <div>
-              <p className="eyebrow">Demo table</p>
-              <h2 id="diners-title">Diner profiles</h2>
+        {state.screen === "create-table" && (
+          <>
+            <div className="intro">
+              <p className="eyebrow">Group dining agent</p>
+              <h1>One table. Current beliefs. One order.</h1>
+              <p>
+                OneTable recalls each diner&apos;s active constraints before it
+                negotiates. Start with Alex, Sam, and Jordan — Priya can join the
+                table once it&apos;s running.
+              </p>
             </div>
-            <span>4 profiles seeded</span>
-          </div>
-          <div className="dinerGrid">
-            {demoDiners.map((diner) => (
-              <article className="diner" key={diner.id}>
-                <span className="avatar">{diner.initials}</span>
-                <div>
-                  <h3>{diner.name}</h3>
-                  <p>
-                    {diner.beliefs
-                      .filter((belief) => belief.status === "active")
-                      .map((belief) => String(belief.value))
-                      .join(" · ")}
-                  </p>
-                </div>
-              </article>
-            ))}
-          </div>
-        </section>
 
-        <section className="workstreams" aria-labelledby="workstreams-title">
-          <div className="sectionHeading">
-            <p className="eyebrow">Parallel ownership</p>
-            <h2 id="workstreams-title">Four independent workstreams</h2>
-          </div>
-          <div className="streamGrid">
-            {workstreams.map((stream) => (
-              <article className="stream" key={stream.person}>
-                <span>{stream.person}</span>
-                <h3>{stream.title}</h3>
-                <p>{stream.detail}</p>
-              </article>
-            ))}
-          </div>
-        </section>
+            <section className="panel" aria-labelledby="diners-title">
+              <div className="panelHeading">
+                <div>
+                  <p className="eyebrow">Create table</p>
+                  <h2 id="diners-title">Who&apos;s at the table</h2>
+                </div>
+                <span>{presentIds.length} of 4 seated</span>
+              </div>
+              <div className="panelBody">
+                <DinerRoster
+                  diners={state.diners}
+                  presentIds={presentIds}
+                  onTogglePriya={actions.togglePriya}
+                />
+              </div>
+            </section>
+
+            <section className="panel" aria-labelledby="intent-title">
+              <div className="panelHeading">
+                <div>
+                  <p className="eyebrow">Dining intent</p>
+                  <h2 id="intent-title">What is the table looking for?</h2>
+                </div>
+              </div>
+              <div className="panelBody">
+                <input
+                  className="intentInput"
+                  type="text"
+                  value={state.intent}
+                  onChange={(event) => actions.setIntent(event.target.value)}
+                  placeholder="quick lunch, around $20 each"
+                  aria-label="Dining intent"
+                />
+                <button
+                  type="button"
+                  className="primaryButton"
+                  onClick={actions.createTable}
+                  disabled={busy}
+                >
+                  {busy ? "Working…" : "Recall & recommend"}
+                </button>
+              </div>
+            </section>
+
+            <StatusBanner phase={state.phase} />
+          </>
+        )}
+
+        {state.screen === "table" && (
+          <>
+            <div className="intro intro--compact">
+              <p className="eyebrow">Live table</p>
+              <h1>Recommendation</h1>
+            </div>
+
+            <StatusBanner phase={state.phase} />
+
+            <section className="panel" aria-labelledby="roster-title">
+              <div className="panelHeading">
+                <div>
+                  <p className="eyebrow">Table</p>
+                  <h2 id="roster-title">Diners</h2>
+                </div>
+                <span>{presentIds.length} of 4 seated</span>
+              </div>
+              <div className="panelBody">
+                <DinerRoster
+                  diners={state.diners}
+                  presentIds={presentIds}
+                  onTogglePriya={state.priyaSelected ? undefined : actions.addPriya}
+                />
+              </div>
+            </section>
+
+            {state.recommendation && (
+              <RecommendationCard
+                recommendation={state.recommendation}
+                previousRecommendation={state.previousRecommendation}
+                restaurants={demoRestaurants}
+                diners={state.diners}
+              />
+            )}
+
+            {state.revision && jordan && (
+              <BeliefRevisionPanel revision={state.revision} diner={jordan} />
+            )}
+
+            <div className="actionRow">
+              {!state.priyaSelected && (
+                <button
+                  type="button"
+                  className="secondaryButton"
+                  onClick={actions.addPriya}
+                  disabled={busy}
+                >
+                  Add Priya to the table
+                </button>
+              )}
+              {state.priyaSelected && !state.revision && (
+                <button
+                  type="button"
+                  className="secondaryButton"
+                  onClick={actions.reviseJordanBelief}
+                  disabled={busy}
+                >
+                  Jordan: correct to shellfish allergy
+                </button>
+              )}
+              <button
+                type="button"
+                className="primaryButton"
+                onClick={actions.approve}
+                disabled={busy || state.phase !== "ready"}
+              >
+                Approve & continue
+              </button>
+            </div>
+          </>
+        )}
+
+        {state.screen === "fresh-session" && (
+          <>
+            <div className="intro intro--compact">
+              <p className="eyebrow">New browser session</p>
+              <h1>Fresh-session proof</h1>
+            </div>
+
+            <StatusBanner phase={state.phase} />
+
+            {state.phase === "ready" && (
+              <FreshSessionPanel
+                diners={state.diners}
+                history={demoGroupHistory}
+                revision={state.revision}
+              />
+            )}
+
+            <div className="actionRow">
+              <button type="button" className="secondaryButton" onClick={actions.restart}>
+                Restart demo
+              </button>
+            </div>
+          </>
+        )}
       </section>
     </main>
   );
 }
-
