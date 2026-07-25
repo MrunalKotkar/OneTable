@@ -379,6 +379,208 @@ h1 {
   word-break: break-all;
 }
 
+/* Checkout */
+
+.dinerChargeList {
+  display: grid;
+  gap: 12px;
+}
+
+.dinerCharge {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 14px 16px;
+}
+
+.dinerChargeHeader {
+  display: flex;
+  justify-content: space-between;
+  font-weight: 700;
+  margin-bottom: 8px;
+}
+
+.dinerCharge ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 4px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.dinerCharge li {
+  display: flex;
+  justify-content: space-between;
+}
+
+.checkoutPaid {
+  margin: 0;
+  color: var(--green);
+  font-weight: 700;
+}
+
+.checkoutFailed {
+  margin: 0;
+  color: var(--coral);
+  font-weight: 700;
+  padding: 10px 14px;
+  border-radius: 8px;
+  background: var(--coral-soft);
+}
+
+/* Fulfillment */
+
+.fulfillmentTimeline {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 10px;
+}
+
+.fulfillmentStep {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.fulfillmentDot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--line);
+  flex: 0 0 10px;
+}
+
+.fulfillmentStep--done {
+  color: var(--ink);
+  font-weight: 700;
+}
+
+.fulfillmentStep--done .fulfillmentDot {
+  background: var(--green);
+}
+
+.fulfillmentLabel {
+  flex: 1;
+}
+
+.fulfillmentEta {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 400;
+}
+
+/* Feedback */
+
+.feedbackForm {
+  display: grid;
+  gap: 10px;
+}
+
+.feedbackForm .actionRow {
+  margin: 0;
+}
+
+.secondaryButton.isSelected {
+  border-color: var(--green);
+  background: var(--green);
+  color: white;
+}
+
+.feedbackProgress {
+  margin: 14px 0 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.feedbackProgress li {
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  color: var(--muted);
+}
+
+.feedbackProgress li.isDone {
+  border-color: #b9d7c9;
+  background: var(--green-soft);
+  color: var(--green);
+  font-weight: 700;
+}
+
+/* Past orders (fresh-session profile) */
+
+.pastOrderList {
+  margin: 6px 0 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 2px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+/* Stripe checkout result pages (src/app/checkout/success, .../cancel) */
+
+.resultPage {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 40px 20px;
+}
+
+.resultPanel {
+  width: min(480px, 100%);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  padding: 32px;
+  display: grid;
+  gap: 14px;
+}
+
+.resultPanel h1 {
+  font-size: 26px;
+}
+
+.resultDetails {
+  margin: 0;
+  display: grid;
+  gap: 8px;
+  font-size: 14px;
+}
+
+.resultDetails div {
+  display: flex;
+  justify-content: space-between;
+  border-top: 1px solid var(--line);
+  padding-top: 8px;
+}
+
+.resultDetails dt {
+  color: var(--muted);
+}
+
+.resultDetails dd {
+  margin: 0;
+  font-weight: 700;
+}
+
+.guardrail {
+  padding: 10px 14px;
+  border-radius: 8px;
+  background: var(--coral-soft);
+  color: var(--coral);
+  font-size: 13px;
+}
+
 /* Create table intent */
 
 .intentInput {
