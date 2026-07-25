@@ -14,7 +14,7 @@ import { RecommendationCard } from "@/components/RecommendationCard";
 import { ShareLink } from "@/components/ShareLink";
 import { StatusBanner } from "@/components/StatusBanner";
 import { useTablePolling } from "@/components/use-table-polling";
-import { demoRestaurants } from "@/data/demo-fixtures";
+import { demoRestaurants } from "@/data/restaurant-catalog";
 import {
   approveTableRequest,
   fetchAllDiners,
