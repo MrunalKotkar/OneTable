@@ -6,9 +6,10 @@ export async function POST(
   { params }: { params: Promise<{ id: string }> },
 ) {
   const { id } = await params;
-  const table = approveTable(id);
-  if (!table) {
-    return NextResponse.json({ error: "not_found" }, { status: 404 });
+  const result = approveTable(id);
+  if (!result.ok) {
+    const status = result.reason === "Table not found." ? 404 : 409;
+    return NextResponse.json({ error: "cannot_approve", message: result.reason }, { status });
   }
   return NextResponse.json(getTable(id));
 }
