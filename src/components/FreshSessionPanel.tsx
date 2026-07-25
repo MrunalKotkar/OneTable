@@ -39,6 +39,15 @@ export function FreshSessionPanel({ diners, history, revision }: FreshSessionPan
                 {corrected && (
                   <p className="freshSessionCorrectedTag">Corrected earlier this session</p>
                 )}
+                {diner.pastOrders.length > 0 && (
+                  <ul className="pastOrderList">
+                    {diner.pastOrders.map((order, index) => (
+                      <li key={`${order.restaurant}-${order.dish}-${index}`}>
+                        {order.liked ? "Liked" : "Didn't love"} {order.dish} at {order.restaurant}
+                      </li>
+                    ))}
+                  </ul>
+                )}
               </div>
             </article>
           );
