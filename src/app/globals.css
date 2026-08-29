@@ -935,3 +935,50 @@ h1 {
     align-items: flex-start;
   }
 }
+
+/* Admin catalog (Phase 2) */
+
+.adminForm {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+  margin-bottom: 1rem;
+}
+
+.adminForm .intentInput {
+  flex: 1 1 12rem;
+}
+
+.adminTableWrap {
+  overflow-x: auto;
+}
+
+.adminTable {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.875rem;
+}
+
+.adminTable th,
+.adminTable td {
+  padding: 0.4rem 0.5rem;
+  text-align: left;
+  vertical-align: middle;
+  border-bottom: 1px solid var(--line);
+}
+
+.adminTable input.intentInput {
+  padding: 0.3rem 0.5rem;
+  min-width: 6rem;
+}
+
+.adminTable select {
+  padding: 0.3rem;
+}
+
+.adminRowActions {
+  display: flex;
+  gap: 0.4rem;
+  white-space: nowrap;
+}

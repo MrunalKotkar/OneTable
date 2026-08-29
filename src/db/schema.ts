@@ -176,7 +176,7 @@ export const dishes = pgTable("dishes", {
     .notNull()
     .references(() => restaurants.id, { onDelete: "cascade" }),
   name: text("name").notNull(),
-  price: numeric("price", { precision: 10, scale: 2 }).notNull(),
+  price: numeric("price", { precision: 10, scale: 2, mode: "number" }).notNull(),
   tags: text("tags").array().notNull().default([]),
   allergens: text("allergens").array().notNull().default([]),
   allergenStatus: text("allergen_status")
@@ -245,7 +245,7 @@ export const recommendations = pgTable("recommendations", {
   restaurantId: text("restaurant_id")
     .notNull()
     .references(() => restaurants.id),
-  total: numeric("total", { precision: 10, scale: 2 }).notNull(),
+  total: numeric("total", { precision: 10, scale: 2, mode: "number" }).notNull(),
   etaMinutes: integer("eta_minutes").notNull(),
   explanation: text("explanation").notNull(),
   alternativeRestaurantId: text("alternative_restaurant_id"),
@@ -263,7 +263,7 @@ export const recommendationSelections = pgTable("recommendation_selections", {
   dishId: text("dish_id")
     .notNull()
     .references(() => dishes.id),
-  price: numeric("price", { precision: 10, scale: 2 }).notNull(),
+  price: numeric("price", { precision: 10, scale: 2, mode: "number" }).notNull(),
   reason: text("reason").notNull(),
 });
 

@@ -6,7 +6,7 @@ export async function POST(
   { params }: { params: Promise<{ id: string }> },
 ) {
   const { id } = await params;
-  const result = startCheckout(id);
+  const result = await startCheckout(id);
   if (!result.ok) {
     const status = result.reason === "Table not found." ? 404 : 409;
     return NextResponse.json({ error: "cannot_start_checkout", message: result.reason }, { status });

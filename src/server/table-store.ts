@@ -7,7 +7,7 @@ import type {
   Recommendation,
   Restaurant,
 } from "@/domain/contracts";
-import { demoRestaurants as restaurantCatalog } from "@/data/restaurant-catalog";
+import { catalogGateway } from "@/features/catalog";
 import { memoryGateway, resetStore } from "@/features/memory";
 import { RuleBasedNegotiationEngine } from "@/features/negotiation/engine";
 import type { Phase } from "@/lib/phase";
@@ -64,6 +64,13 @@ export interface TableState {
 export interface TableSnapshot extends TableState {
   diners: DinerProfile[];
   fulfillmentTimeline: FulfillmentStep[] | null;
+  /**
+   * The current and (if any) alternative recommendation's restaurants,
+   * each with its full menu — resolved here server-side against the DB
+   * catalog gateway so the client never imports the static fixture (or
+   * talks to the DB) itself.
+   */
+  restaurants: Restaurant[];
 }
 
 const tables = new Map<string, TableState>();
@@ -103,11 +110,11 @@ function scheduleAsync(
   }, delayMs);
 }
 
-function restaurantById(id: string): Restaurant | null {
-  return restaurantCatalog.find((r) => r.id === id) ?? null;
+function restaurantById(id: string): Promise<Restaurant | null> {
+  return catalogGateway.getRestaurant(id);
 }
 
-function restaurantFor(recommendation: Recommendation): Restaurant | null {
+function restaurantFor(recommendation: Recommendation): Promise<Restaurant | null> {
   return restaurantById(recommendation.restaurantId);
 }
 
@@ -122,14 +129,13 @@ function restaurantFor(recommendation: Recommendation): Restaurant | null {
  */
 async function runRebalance(table: TableState): Promise<void> {
   try {
-    const context = await memoryGateway.recallGroupContext(
-      GROUP_ID,
-      table.seatedDinerIds,
-      table.intent,
-    );
+    const [context, restaurants] = await Promise.all([
+      memoryGateway.recallGroupContext(GROUP_ID, table.seatedDinerIds, table.intent),
+      catalogGateway.listRestaurants(),
+    ]);
     const recommendation = await negotiationEngine.rebalance({
       context,
-      restaurants: restaurantCatalog,
+      restaurants,
       previousRecommendation: table.recommendation ?? undefined,
     });
     table.previousRecommendation = table.recommendation;
@@ -270,7 +276,9 @@ export function approveTable(id: string): { ok: true; table: TableState } | { ok
  * — never from a hardcoded fixture — so the split always matches what
  * this specific group actually negotiated.
  */
-export function startCheckout(id: string): { ok: true; table: TableState } | { ok: false; reason: string } {
+export async function startCheckout(
+  id: string,
+): Promise<{ ok: true; table: TableState } | { ok: false; reason: string }> {
   const table = tables.get(id);
   if (!table) return { ok: false, reason: "Table not found." };
   if (!table.approved || !table.recommendation || table.approvedVersion === null) {
@@ -286,7 +294,7 @@ export function startCheckout(id: string): { ok: true; table: TableState } | { o
   // Person 4's simulator labels "main" line items with the raw dishId
   // (it has no restaurant to resolve names against). Relabel with the
   // actual dish name here, since we do have the restaurant.
-  const restaurant = restaurantFor(table.recommendation);
+  const restaurant = await restaurantFor(table.recommendation);
   if (restaurant) {
     const dishNameById = new Map(restaurant.menu.map((dish) => [dish.id, dish.name]));
     session.dinerCharges = session.dinerCharges.map((charge) => ({
@@ -338,7 +346,7 @@ export function payForTable(
   table.checkout = { ...table.checkout, status: "processing" };
   table.updatedAt = Date.now();
 
-  schedule(id, 700, (t) => {
+  scheduleAsync(id, 700, async (t) => {
     const transition = simulatePayment({
       session: sessionForAttempt,
       forceFailure: options?.forceFailure,
@@ -348,7 +356,7 @@ export function payForTable(
 
     if (transition.result.status === "paid") {
       t.fulfillmentStatus = "submitted";
-      const restaurant = t.recommendation ? restaurantFor(t.recommendation) : null;
+      const restaurant = t.recommendation ? await restaurantFor(t.recommendation) : null;
       if (restaurant && t.recommendation) {
         const steps: FulfillmentStatus[] = [
           "accepted",
@@ -423,8 +431,20 @@ export async function submitFeedback(
 export async function getTable(id: string): Promise<TableSnapshot | null> {
   const table = tables.get(id);
   if (!table) return null;
-  const context = await memoryGateway.recallGroupContext(GROUP_ID, table.seatedDinerIds, table.intent);
-  const restaurant = table.recommendation ? restaurantFor(table.recommendation) : null;
+
+  const relevantRestaurantIds = [
+    table.recommendation?.restaurantId,
+    table.recommendation?.alternativeRestaurantId,
+  ].filter((rid): rid is string => rid !== null && rid !== undefined);
+
+  const [context, restaurants] = await Promise.all([
+    memoryGateway.recallGroupContext(GROUP_ID, table.seatedDinerIds, table.intent),
+    catalogGateway.getRestaurants(relevantRestaurantIds),
+  ]);
+
+  const restaurant = table.recommendation
+    ? (restaurants.find((r) => r.id === table.recommendation?.restaurantId) ?? null)
+    : null;
   const fulfillmentTimeline =
     table.recommendation && restaurant && table.fulfillmentStatus
       ? createFulfillmentTimeline(table.recommendation, restaurant, table.fulfillmentStatus)
@@ -433,6 +453,7 @@ export async function getTable(id: string): Promise<TableSnapshot | null> {
     ...table,
     diners: context.diners,
     fulfillmentTimeline,
+    restaurants,
   };
 }
 
@@ -453,9 +474,12 @@ export async function getDinerProfile(id: string): Promise<DinerProfile | null> 
  */
 export async function getGroupHistory(): Promise<GroupMealSummary[]> {
   const context = await memoryGateway.recallGroupContext(GROUP_ID, ALL_DINER_IDS, "");
+  const restaurantIds = context.history.map((meal) => meal.restaurant);
+  const restaurants = await catalogGateway.getRestaurants(restaurantIds);
+  const nameById = new Map(restaurants.map((r) => [r.id, r.name]));
   return context.history.map((meal) => ({
     ...meal,
-    restaurant: restaurantById(meal.restaurant)?.name ?? meal.restaurant,
+    restaurant: nameById.get(meal.restaurant) ?? meal.restaurant,
   }));
 }
 

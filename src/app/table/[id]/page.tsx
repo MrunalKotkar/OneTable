@@ -14,7 +14,6 @@ import { RecommendationCard } from "@/components/RecommendationCard";
 import { ShareLink } from "@/components/ShareLink";
 import { StatusBanner } from "@/components/StatusBanner";
 import { useTablePolling } from "@/components/use-table-polling";
-import { demoRestaurants } from "@/data/restaurant-catalog";
 import {
   approveTableRequest,
   fetchAllDiners,
@@ -116,7 +115,7 @@ export default function TablePage() {
   };
 
   const restaurant = table.recommendation
-    ? demoRestaurants.find((r) => r.id === table.recommendation?.restaurantId)
+    ? table.restaurants.find((r) => r.id === table.recommendation?.restaurantId)
     : undefined;
   const yourSelection = table.recommendation?.selections.find((s) => s.dinerId === you);
   const yourDish = restaurant?.menu.find((d) => d.id === yourSelection?.dishId) ?? null;
@@ -178,7 +177,7 @@ export default function TablePage() {
               <RecommendationCard
                 recommendation={table.recommendation}
                 previousRecommendation={table.previousRecommendation}
-                restaurants={demoRestaurants}
+                restaurants={table.restaurants}
                 diners={table.diners}
               />
             )}

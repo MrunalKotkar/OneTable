@@ -14,6 +14,7 @@
     "db:migrate": "drizzle-kit migrate",
     "db:push": "drizzle-kit push",
     "db:studio": "drizzle-kit studio",
+    "db:seed": "npx --yes tsx@4 --tsconfig tsconfig.json src/db/seed.ts",
     "verify:memory": "npx --yes tsx@4 --tsconfig tsconfig.json src/features/memory/verify.ts",
     "verify:xtrace": "npx --yes tsx@4 --tsconfig tsconfig.json src/features/memory/xtrace-smoke.ts"
   },
