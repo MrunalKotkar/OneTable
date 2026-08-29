@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { formatCents } from "@/features/checkout/simulator";
+import { formatCents } from "@/lib/money";
 import { getStripePaymentBySessionId } from "@/features/checkout/payment-store";
 
 export default async function CheckoutSuccess({

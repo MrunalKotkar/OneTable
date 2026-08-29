@@ -1,4 +1,5 @@
 import type { Recommendation } from "@/domain/contracts";
+import { centsFromDollars } from "@/lib/money";
 import { NoFeasibleRestaurantError } from "@/features/negotiation/contract";
 import type {
   CheckoutPaymentTransition,
@@ -28,8 +29,6 @@ interface PrepareCheckoutInput {
   sharedItems?: SharedCheckoutItem[];
   now?: string;
 }
-
-const centsFromDollars = (amount: number) => Math.round(amount * 100);
 
 const splitEvenly = (totalCents: number, participantIds: string[]) => {
   const sortedIds = [...participantIds].sort();
@@ -252,9 +251,3 @@ export const simulatePayment = ({
 export const payCheckout = (input: PayCheckoutInput): CheckoutResult => {
   return simulatePayment(input).result;
 };
-
-export const formatCents = (amountCents: number) =>
-  new Intl.NumberFormat("en-US", {
-    style: "currency",
-    currency: "USD",
-  }).format(amountCents / 100);

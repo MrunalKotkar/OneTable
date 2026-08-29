@@ -9,19 +9,9 @@ import type {
   Restaurant,
 } from "@/domain/contracts";
 import type { NegotiationEngine, RebalanceInput } from "./contract";
+import { NoFeasibleRestaurantError } from "./contract";
 
-/**
- * Thrown by rebalance() when no restaurant in the candidate set has a safe
- * dish for every diner. The Recommendation type has no "no feasible result"
- * variant, so rather than inventing a fake/empty success value we surface
- * this as an explicit, named failure the caller must handle.
- */
-export class NoFeasibleRestaurantError extends Error {
-  constructor(groupId: string) {
-    super(`No feasible restaurant found for group "${groupId}"`);
-    this.name = "NoFeasibleRestaurantError";
-  }
-}
+export { NoFeasibleRestaurantError };
 
 const activeBeliefs = (diner: DinerProfile): Belief[] =>
   diner.beliefs.filter((belief) => belief.status === "active");
@@ -137,7 +127,9 @@ function isLikedPastOrder(diner: DinerProfile, dish: Dish, restaurant: Restauran
 export function selectDish(diner: DinerProfile, restaurant: Restaurant): Dish {
   const safeDishes = restaurant.menu.filter((dish) => isDishSafe(dish, diner));
   if (safeDishes.length === 0) {
-    throw new NoFeasibleRestaurantError(diner.id);
+    throw new NoFeasibleRestaurantError(
+      `No safe dish for diner "${diner.id}" at "${restaurant.name}".`,
+    );
   }
 
   const goals = goalTags(diner);
@@ -230,7 +222,9 @@ export class RuleBasedNegotiationEngine implements NegotiationEngine {
     );
 
     if (feasible.length === 0) {
-      throw new NoFeasibleRestaurantError(context.groupId);
+      throw new NoFeasibleRestaurantError(
+        `No feasible restaurant found for group "${context.groupId}".`,
+      );
     }
 
     let bestRestaurant = feasible[0];

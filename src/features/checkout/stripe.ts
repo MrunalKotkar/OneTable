@@ -1,5 +1,6 @@
 import Stripe from "stripe";
 import type { Recommendation, Restaurant } from "@/domain/contracts";
+import { centsFromDollars } from "@/lib/money";
 import type { CheckoutSession, SharedCheckoutItem } from "./contract";
 
 interface StripeLineItemInput {
@@ -47,7 +48,7 @@ export const buildStripeLineItems = ({
         name: dishNameById.get(selection.dishId) ?? selection.dishId,
         description: selection.reason,
       },
-      unit_amount: Math.round(selection.price * 100),
+      unit_amount: centsFromDollars(selection.price),
     },
     quantity: 1,
   }));
@@ -59,7 +60,7 @@ export const buildStripeLineItems = ({
         name: item.name,
         description: `Shared by ${item.participantIds.length} diners`,
       },
-      unit_amount: Math.round(item.price * 100),
+      unit_amount: centsFromDollars(item.price),
     },
     quantity: item.quantity,
   }));

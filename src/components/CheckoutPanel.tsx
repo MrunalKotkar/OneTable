@@ -1,5 +1,5 @@
 import type { CheckoutResult, CheckoutSession } from "@/features/checkout/contract";
-import { formatCents } from "@/features/checkout/simulator";
+import { formatCents } from "@/lib/money";
 import type { DinerProfile } from "@/domain/contracts";
 
 interface CheckoutPanelProps {
