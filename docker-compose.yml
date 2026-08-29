@@ -1,0 +1,20 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: onetable
+      POSTGRES_PASSWORD: onetable
+      POSTGRES_DB: onetable
+    ports:
+      # Host port 5433, not 5432 — many dev machines (this one included) already
+      # run a native Postgres service on 5432, and Windows will happily let a
+      # container's port-forward and that native service both claim :5432,
+      # silently routing connections to whichever one, with the wrong
+      # credentials. 5433 sidesteps the collision entirely.
+      - "5433:5432"
+    volumes:
+      - onetable-postgres-data:/var/lib/postgresql/data
+
+volumes:
+  onetable-postgres-data:
