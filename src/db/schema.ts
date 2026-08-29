@@ -333,9 +333,9 @@ export const mealOutcomes = pgTable("meal_outcomes", {
   groupId: text("group_id")
     .notNull()
     .references(() => groups.id, { onDelete: "cascade" }),
-  tableId: text("table_id")
-    .notNull()
-    .references(() => tables.id, { onDelete: "cascade" }),
+  // No tableId here: MealOutcome (src/domain/contracts.ts) doesn't carry one
+  // — memoryGateway.saveMealOutcome() is scoped to the group, not any one
+  // table, matching how table-store.ts already calls it.
   recommendationVersion: integer("recommendation_version").notNull(),
   restaurantId: text("restaurant_id")
     .notNull()

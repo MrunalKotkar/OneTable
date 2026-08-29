@@ -8,7 +8,7 @@ This repository is intentionally a minimal boilerplate. It contains shared contr
 
 1. Install dependencies with `npm install`.
 2. Duplicate `.env.example` as `.env.local`.
-3. Keep `MEMORY_PROVIDER=mock` until the XTrace round-trip is verified.
+3. Set `DATABASE_URL` (see `docker-compose.yml` for local Postgres) to use the real DB-backed memory gateway, or leave it unset / set `MEMORY_PROVIDER=mock` to run against the in-memory mock instead.
 4. Run `npm run dev`.
 5. Open `http://localhost:3000`.
 

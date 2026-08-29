@@ -7,6 +7,7 @@ import type {
   MealOutcome,
 } from "@/domain/contracts";
 import type { MemoryGateway, ReviseBeliefInput } from "./contract";
+import { pickSupersededBelief } from "./supersession";
 import {
   activeBeliefs,
   addOutcome,
@@ -32,33 +33,6 @@ let revisionSeq = 0;
 
 function revisionKey(dinerId: string, kind: BeliefKind): string {
   return `${dinerId}:${kind}`;
-}
-
-/**
- * Choose which existing active belief a correction supersedes.
- *
- * 1. A same-kind active belief is the direct replacement (e.g. a new budget
- *    supersedes the old budget).
- * 2. Otherwise, introducing a hard restriction (allergy/diet) supersedes an
- *    active "no dietary restrictions" marker. This is Jordan's path: the
- *    correction is an ALLERGY, but the belief it retires is the DIET belief
- *    that asserted no constraints.
- */
-function pickSupersededBelief(
-  active: Belief[],
-  kind: BeliefKind,
-): Belief | null {
-  const sameKind = active.find((b) => b.kind === kind);
-  if (sameKind) return sameKind;
-
-  if (kind === "allergy" || kind === "diet") {
-    const unrestricted = active.find(
-      (b) => b.kind === "diet" && b.value === "no dietary restrictions",
-    );
-    if (unrestricted) return unrestricted;
-  }
-
-  return null;
 }
 
 export const mockMemoryGateway: MemoryGateway = {

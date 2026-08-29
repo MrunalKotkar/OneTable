@@ -8,6 +8,13 @@
       "when": 1787965360151,
       "tag": "0000_right_the_spike",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1787966614632,
+      "tag": "0001_sparkling_radioactive_man",
+      "breakpoints": true
     }
   ]
 }

@@ -1,23 +1,28 @@
+import { dbMemoryGateway } from "./db-gateway";
 import { mockMemoryGateway } from "./mock-gateway";
-import { xtraceMemoryGateway } from "./xtrace-gateway";
 import type { MemoryGateway } from "./contract";
 
 export type { MemoryGateway, ReviseBeliefInput } from "./contract";
 export { mockMemoryGateway } from "./mock-gateway";
-export { xtraceMemoryGateway, resetXtraceProcessState } from "./xtrace-gateway";
+export { dbMemoryGateway } from "./db-gateway";
 export { resetStore } from "./store";
 
 /**
- * Pick the live provider. XTrace only when explicitly selected AND a key is
- * present; otherwise the deterministic mock (also the offline-safe fallback, so
- * a missing key or unreachable XTrace can never break the demo).
+ * Pick the live provider. DB-backed whenever DATABASE_URL is configured
+ * (the real deployed path); otherwise the deterministic in-process mock —
+ * also the offline-safe fallback for local dev without a DB, and
+ * `MEMORY_PROVIDER=mock` forces it even with a DATABASE_URL present (handy
+ * for quickly comparing behavior against the mock).
  *
- * Called at request time (not memoized) so it always reflects the current env.
+ * Called at request time (not memoized) so it always reflects the current
+ * env, same as the pre-DB version of this file did for XTrace.
  */
 export function selectMemoryGateway(): MemoryGateway {
-  const provider = process.env.MEMORY_PROVIDER?.toLowerCase();
-  if (provider === "xtrace" && process.env.XTRACE_API_KEY) {
-    return xtraceMemoryGateway;
+  if (process.env.MEMORY_PROVIDER?.toLowerCase() === "mock") {
+    return mockMemoryGateway;
+  }
+  if (process.env.DATABASE_URL) {
+    return dbMemoryGateway;
   }
   return mockMemoryGateway;
 }
