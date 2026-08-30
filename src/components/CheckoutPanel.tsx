@@ -8,10 +8,19 @@ interface CheckoutPanelProps {
   diners: DinerProfile[];
   canPay: boolean;
   paying: boolean;
+  stripeConfigured: boolean;
   onPay: () => void;
 }
 
-export function CheckoutPanel({ session, lastResult, diners, canPay, paying, onPay }: CheckoutPanelProps) {
+export function CheckoutPanel({
+  session,
+  lastResult,
+  diners,
+  canPay,
+  paying,
+  stripeConfigured,
+  onPay,
+}: CheckoutPanelProps) {
   const dinerName = (id: string) => diners.find((d) => d.id === id)?.name ?? id;
 
   return (
@@ -45,7 +54,13 @@ export function CheckoutPanel({ session, lastResult, diners, canPay, paying, onP
 
         {session.status === "idle" && (
           <button type="button" className="primaryButton" onClick={onPay} disabled={!canPay || paying}>
-            {paying ? "Processing…" : `Pay ${formatCents(session.groupTotalCents)} (simulated)`}
+            {paying
+              ? stripeConfigured
+                ? "Redirecting to Stripe…"
+                : "Processing…"
+              : stripeConfigured
+                ? `Pay ${formatCents(session.groupTotalCents)} with Stripe`
+                : `Pay ${formatCents(session.groupTotalCents)} (simulated)`}
           </button>
         )}
 

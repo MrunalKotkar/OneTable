@@ -5,6 +5,14 @@ import type {
 } from "@/domain/contracts";
 import type { SharedCheckoutItem } from "./contract";
 
+/**
+ * Test-only fixtures for acceptance.test.ts's money/supersession regression
+ * net. Not demo/production data — this used to live in demo-fixtures.ts
+ * alongside the fixture Stripe checkout used against fake data, but that
+ * whole file was deleted in Phase 6 (real Stripe checkout now runs against
+ * a table's actual recommendation, never a fixture). These fixtures still
+ * pull their weight purely as deterministic test input.
+ */
 export const finalRecommendationFixture: Recommendation = {
   version: 3,
   restaurantId: "green-ladle",

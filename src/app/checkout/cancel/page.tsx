@@ -1,32 +1,21 @@
 import Link from "next/link";
-import { getStripePaymentByCheckoutSessionId } from "@/features/checkout/payment-store";
 
 export default async function CheckoutCancel({
   searchParams,
 }: {
-  searchParams: Promise<{ checkout_id?: string }>;
+  searchParams: Promise<{ table?: string }>;
 }) {
-  const { checkout_id: checkoutSessionId } = await searchParams;
-  const paymentRecord = checkoutSessionId
-    ? getStripePaymentByCheckoutSessionId(checkoutSessionId)
-    : null;
+  const { table } = await searchParams;
 
   return (
     <main className="resultPage">
       <section className="resultPanel">
         <p className="eyebrow">Stripe checkout</p>
         <h1>Payment canceled</h1>
-        <p>
-          No payment was completed, so fulfillment stays locked and the group can
-          return to checkout.
-        </p>
-        {paymentRecord ? (
-          <p className="guardrail">
-            Checkout {paymentRecord.checkoutSessionId} is still marked{" "}
-            {paymentRecord.status}.
-          </p>
-        ) : null}
-        <Link href="/">Back to OneTable</Link>
+        <p>No payment was completed — the table is still waiting to be paid.</p>
+        <Link href={table ? `/table/${table}` : "/"}>
+          {table ? "Back to your table" : "Back to OneTable"}
+        </Link>
       </section>
     </main>
   );

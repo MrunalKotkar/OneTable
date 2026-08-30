@@ -63,6 +63,17 @@ export async function payTableRequest(id: string, forceFailure = false): Promise
   return postAction(`/api/tables/${id}/pay`, { forceFailure });
 }
 
+export async function startStripeCheckoutRequest(
+  id: string,
+): Promise<{ url: string } | { error: string }> {
+  const res = await fetch(`/api/tables/${id}/checkout/stripe`, { method: "POST" });
+  const data = await res.json().catch(() => null);
+  if (!res.ok) {
+    return { error: data?.message ?? "Could not start Stripe checkout." };
+  }
+  return { url: data.url as string };
+}
+
 export async function submitFeedbackRequest(
   id: string,
   liked: boolean,

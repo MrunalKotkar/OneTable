@@ -1,7 +1,7 @@
 import Stripe from "stripe";
 import type { Recommendation, Restaurant } from "@/domain/contracts";
 import { centsFromDollars } from "@/lib/money";
-import type { CheckoutSession, SharedCheckoutItem } from "./contract";
+import type { SharedCheckoutItem } from "./contract";
 
 interface StripeLineItemInput {
   recommendation: Recommendation;
@@ -12,11 +12,21 @@ interface StripeLineItemInput {
 export const isStripeConfigured = () =>
   Boolean(process.env.STRIPE_SECRET_KEY && process.env.NEXT_PUBLIC_APP_URL);
 
+/**
+ * Test-mode-only, enforced: this app never handles real money, so a
+ * `sk_live_` key is always a mistake (a leaked/misconfigured production
+ * key pasted into the wrong place) rather than something to honor.
+ */
 export const getStripe = () => {
   const secretKey = process.env.STRIPE_SECRET_KEY;
 
   if (!secretKey) {
     throw new Error("STRIPE_SECRET_KEY is not configured.");
+  }
+  if (secretKey.startsWith("sk_live_")) {
+    throw new Error(
+      "STRIPE_SECRET_KEY is a live-mode key (sk_live_...). This app only ever runs against Stripe test mode — use an sk_test_ key.",
+    );
   }
 
   return new Stripe(secretKey);
@@ -69,14 +79,19 @@ export const buildStripeLineItems = ({
 };
 
 export const buildStripeMetadata = ({
-  checkoutSession,
+  checkoutSessionId,
+  recommendationVersion,
   groupId,
+  tableId,
 }: {
-  checkoutSession: CheckoutSession;
+  checkoutSessionId: string;
+  recommendationVersion: number;
   groupId: string;
+  tableId: string;
 }): Stripe.MetadataParam => ({
-  checkoutSessionId: checkoutSession.id,
-  recommendationVersion: String(checkoutSession.recommendationVersion),
+  checkoutSessionId,
+  recommendationVersion: String(recommendationVersion),
   groupId,
+  tableId,
   source: "onetable",
 });

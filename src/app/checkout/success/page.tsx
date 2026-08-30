@@ -1,45 +1,33 @@
 import Link from "next/link";
-import { formatCents } from "@/lib/money";
-import { getStripePaymentBySessionId } from "@/features/checkout/payment-store";
 
+/**
+ * Stripe's success_url lands here (Phase 6) with our own tableId, not a
+ * Stripe session id — the live table page (already polling, already
+ * showing the "processing" reveal delay from src/server/elapsed.ts) is
+ * the single source of truth for whether the payment actually landed, so
+ * this page's only job is to hand the diner back to it. The webhook that
+ * marks the table paid can arrive slightly before or after this redirect;
+ * either way the table page reflects it correctly once it does.
+ */
 export default async function CheckoutSuccess({
   searchParams,
 }: {
-  searchParams: Promise<{ session_id?: string }>;
+  searchParams: Promise<{ table?: string }>;
 }) {
-  const { session_id: stripeSessionId } = await searchParams;
-  const paymentRecord = stripeSessionId
-    ? getStripePaymentBySessionId(stripeSessionId)
-    : null;
-  const isPaid = paymentRecord?.status === "paid";
+  const { table } = await searchParams;
 
   return (
     <main className="resultPage">
       <section className="resultPanel">
         <p className="eyebrow">Stripe checkout</p>
-        <h1>{isPaid ? "Payment confirmed" : "Payment processing"}</h1>
+        <h1>Payment submitted</h1>
         <p>
-          {isPaid
-            ? "Stripe confirmed the payment webhook, so fulfillment can begin."
-            : "Stripe redirected back successfully. If the webhook listener is running, this will flip to paid after confirmation."}
+          Stripe confirmed your card. We&apos;re waiting on the payment webhook
+          to mark the table paid — this is usually instant.
         </p>
-        {paymentRecord ? (
-          <dl className="resultDetails">
-            <div>
-              <dt>Checkout</dt>
-              <dd>{paymentRecord.checkoutSessionId}</dd>
-            </div>
-            <div>
-              <dt>Version</dt>
-              <dd>{paymentRecord.recommendationVersion}</dd>
-            </div>
-            <div>
-              <dt>Total</dt>
-              <dd>{formatCents(paymentRecord.amountTotalCents)}</dd>
-            </div>
-          </dl>
-        ) : null}
-        <Link href="/">Back to OneTable</Link>
+        <Link href={table ? `/table/${table}` : "/"}>
+          {table ? "Back to your table" : "Back to OneTable"}
+        </Link>
       </section>
     </main>
   );

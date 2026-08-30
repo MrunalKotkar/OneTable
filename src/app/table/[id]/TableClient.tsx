@@ -21,6 +21,7 @@ import {
   payTableRequest,
   reviseBeliefRequest,
   startCheckoutRequest,
+  startStripeCheckoutRequest,
   submitFeedbackRequest,
 } from "@/lib/api";
 
@@ -76,7 +77,22 @@ export function TableClient({ tableId, you }: { tableId: string; you: string }) 
     runAction(() => reviseBeliefRequest(tableId, kind, value, correctionText));
   const approve = () => runAction(() => approveTableRequest(tableId));
   const startCheckout = () => runAction(() => startCheckoutRequest(tableId));
-  const pay = () => runAction(() => payTableRequest(tableId));
+
+  const pay = async () => {
+    if (!table.stripeConfigured) {
+      await runAction(() => payTableRequest(tableId));
+      return;
+    }
+    setActionBusy(true);
+    setActionError(null);
+    const result = await startStripeCheckoutRequest(tableId);
+    if ("url" in result) {
+      window.location.href = result.url;
+      return;
+    }
+    setActionError(result.error);
+    setActionBusy(false);
+  };
   const submitFeedback = (liked: boolean, note?: string) =>
     runAction(() => submitFeedbackRequest(tableId, liked, note));
 
@@ -191,6 +207,7 @@ export function TableClient({ tableId, you }: { tableId: string; you: string }) 
                 diners={table.diners}
                 canPay={table.checkout.status === "idle" || table.checkout.status === "failed"}
                 paying={actionBusy}
+                stripeConfigured={table.stripeConfigured}
                 onPay={pay}
               />
             )}

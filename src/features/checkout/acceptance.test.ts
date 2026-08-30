@@ -13,7 +13,7 @@ import {
   finalRecommendationFixture,
   finalRestaurantFixture,
   sharedCheckoutItemsFixture,
-} from "./demo-fixtures";
+} from "./acceptance.fixtures";
 import {
   createCheckoutSession,
   payCheckout,

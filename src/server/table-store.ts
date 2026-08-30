@@ -30,6 +30,13 @@ import type { Phase } from "@/lib/phase";
 import { getOrCreateGroupForDiner } from "@/server/identity";
 import type { CheckoutResult, CheckoutSession } from "@/features/checkout/contract";
 import { createCheckoutSession, simulatePayment } from "@/features/checkout/simulator";
+import {
+  buildStripeLineItems,
+  buildStripeMetadata,
+  getAppUrl,
+  getStripe,
+  isStripeConfigured,
+} from "@/features/checkout/stripe";
 import type { FeedbackMemoryUpdate, FulfillmentStep } from "@/features/fulfillment/contract";
 import {
   buildMealOutcome,
@@ -89,6 +96,8 @@ export interface TableSnapshot extends TableState {
    * talks to the DB) itself.
    */
   restaurants: Restaurant[];
+  /** Lets the client decide: a real Stripe Checkout redirect, or the in-memory simulatePayment fallback. */
+  stripeConfigured: boolean;
 }
 
 type TableRow = typeof tables.$inferSelect;
@@ -476,6 +485,56 @@ export async function startCheckout(
 }
 
 /**
+ * Builds a real Stripe Checkout Session from the table's actual approved
+ * recommendation (Phase 6 of PRODUCTION_REBUILD_PLAN.md) — the real
+ * tableId (and checkoutSessionId, groupId) go into Stripe's metadata so
+ * the webhook can resolve exactly which table to mark paid. Requires
+ * startCheckout() to have already run (same DB checkout_sessions row
+ * either payment method settles).
+ */
+export async function startStripeCheckout(
+  id: string,
+): Promise<{ ok: true; url: string } | { ok: false; reason: string }> {
+  if (!isStripeConfigured()) {
+    return { ok: false, reason: "Stripe is not configured." };
+  }
+
+  const [row] = await db.select().from(tables).where(eq(tables.id, id));
+  if (!row) return { ok: false, reason: "Table not found." };
+
+  const checkoutRow = await loadRawCheckoutSessionRow(id);
+  if (!checkoutRow) return { ok: false, reason: "Start checkout before paying." };
+  if (checkoutRow.status === "paid") return { ok: false, reason: "This table has already been paid." };
+
+  const { current: recommendation } = await loadRecommendations(id);
+  if (!recommendation) return { ok: false, reason: "No recommendation on file." };
+
+  const restaurant = await catalogGateway.getRestaurant(recommendation.restaurantId);
+  if (!restaurant) return { ok: false, reason: "Restaurant not found." };
+
+  const stripe = getStripe();
+  const appUrl = getAppUrl();
+  const stripeSession = await stripe.checkout.sessions.create({
+    mode: "payment",
+    line_items: buildStripeLineItems({ recommendation, restaurant, sharedItems: [] }),
+    metadata: buildStripeMetadata({
+      checkoutSessionId: checkoutRow.id,
+      recommendationVersion: checkoutRow.recommendationVersion,
+      groupId: row.groupId,
+      tableId: id,
+    }),
+    success_url: `${appUrl}/checkout/success?table=${id}`,
+    cancel_url: `${appUrl}/checkout/cancel?table=${id}`,
+  });
+
+  if (!stripeSession.url) {
+    return { ok: false, reason: "Stripe did not return a checkout URL." };
+  }
+
+  return { ok: true, url: stripeSession.url };
+}
+
+/**
  * Simulates payment. The row is written with its real, final status
  * immediately (see src/server/elapsed.ts's derivePaymentDisplayStatus for
  * the brief "processing" reveal delay this produces on read).
@@ -490,6 +549,10 @@ export async function payForTable(
   id: string,
   options?: { forceFailure?: boolean },
 ): Promise<{ ok: true } | { ok: false; reason: string }> {
+  if (isStripeConfigured()) {
+    return { ok: false, reason: "Stripe is configured — pay through Stripe checkout instead." };
+  }
+
   const [row] = await db.select().from(tables).where(eq(tables.id, id));
   if (!row) return { ok: false, reason: "Table not found." };
 
@@ -544,6 +607,51 @@ export async function payForTable(
   }
 
   return { ok: true };
+}
+
+/**
+ * Records a real Stripe payment outcome — called only from the Stripe
+ * webhook handler (src/app/api/webhooks/stripe/route.ts), never directly
+ * from a client request. Idempotent against Stripe's own webhook retries:
+ * a stripeSessionId already on file (checked via the unique constraint on
+ * payments.stripe_session_id) or a checkout session already marked paid
+ * is a silent no-op rather than a duplicate row or a double-set paidAt.
+ */
+export async function confirmStripePayment(
+  checkoutSessionId: string,
+  outcome:
+    | { status: "paid"; stripeSessionId: string; confirmationId: string | null }
+    | { status: "failed"; stripeSessionId: string; failureReason: string },
+): Promise<void> {
+  const [checkoutRow] = await db
+    .select()
+    .from(checkoutSessions)
+    .where(eq(checkoutSessions.id, checkoutSessionId));
+  if (!checkoutRow) return;
+  if (checkoutRow.status === "paid") return;
+
+  const [existingPayment] = await db
+    .select({ id: payments.id })
+    .from(payments)
+    .where(eq(payments.stripeSessionId, outcome.stripeSessionId));
+  if (existingPayment) return;
+
+  await db.insert(payments).values({
+    checkoutSessionId,
+    stripeSessionId: outcome.stripeSessionId,
+    amountTotalCents: checkoutRow.groupTotalCents,
+    status: outcome.status,
+    confirmationId: outcome.status === "paid" ? outcome.confirmationId : null,
+    failureReason: outcome.status === "failed" ? outcome.failureReason : null,
+  });
+  await db.update(checkoutSessions).set({ status: outcome.status }).where(eq(checkoutSessions.id, checkoutSessionId));
+
+  if (outcome.status === "paid") {
+    await db
+      .update(tables)
+      .set({ paidAt: new Date(), updatedAt: new Date() })
+      .where(eq(tables.id, checkoutRow.tableId));
+  }
 }
 
 async function loadCheckoutDisplay(
@@ -782,6 +890,7 @@ export async function getTable(id: string): Promise<TableSnapshot | null> {
     diners: context.diners,
     fulfillmentTimeline,
     restaurants,
+    stripeConfigured: isStripeConfigured(),
   };
 }
 
