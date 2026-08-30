@@ -12,13 +12,14 @@ import {
 } from "drizzle-orm/pg-core";
 import type {
   BeliefKind,
+  BeliefRevision,
   BeliefStatus,
-  FulfillmentStatus,
   PaymentStatus,
 } from "@/domain/contracts";
 import type { Phase } from "@/lib/phase";
 import type { RecommendationChange } from "@/domain/contracts";
 import type { CheckoutLineItem } from "@/features/checkout/contract";
+import type { PendingAction } from "@/server/elapsed";
 
 /**
  * Phase 1 groundwork only (PRODUCTION_REBUILD_PLAN.md) — nothing reads from
@@ -198,20 +199,30 @@ export const tables = pgTable("tables", {
     .notNull()
     .references(() => groups.id, { onDelete: "cascade" }),
   intent: text("intent").notNull(),
+  /**
+   * The REAL, already-settled phase — every action handler computes its
+   * result (recall, rebalance, revision) eagerly and writes the true
+   * outcome here immediately, never via a scheduled mutation. `pendingAction`
+   * + `actionStartedAt` below are purely a display veil: src/server/elapsed.ts
+   * derives a transitional phase ("recalling" -> "negotiating" -> ...) from
+   * elapsed time for whoever is polling, while this column already holds the
+   * true terminal answer. Same "pure function of how much time has passed"
+   * approach fulfillment status uses (derived from `paidAt`, no stored
+   * per-step column at all) — this just also needs to know which
+   * transitional sequence to walk and when it started.
+   */
   phase: text("phase").$type<Phase>().notNull().default("idle"),
   errorMessage: text("error_message"),
   approved: boolean("approved").notNull().default(false),
   approvedVersion: integer("approved_version"),
-  fulfillmentStatus: text("fulfillment_status").$type<FulfillmentStatus>(),
-  /**
-   * Phase 4 elapsed-time derivation, replacing setTimeout chains: the
-   * current phase/fulfillment step is computed as a pure function of "how
-   * much time has passed" since these timestamps on every read, rather
-   * than a scheduled mutation (which cannot survive a serverless function
-   * returning on Vercel).
-   */
+  pendingAction: text("pending_action").$type<PendingAction>(),
+  actionStartedAt: timestamp("action_started_at", { mode: "date" }),
+  /** Display-only snapshot of the most recent belief revision made at this table (see BeliefRevisionPanel). Not the source of truth — that's the beliefs table. */
+  lastRevision: jsonb("last_revision").$type<BeliefRevision>(),
+  /** Drives fulfillment-step derivation (src/server/elapsed.ts) — no stored per-step fulfillment column. */
   paidAt: timestamp("paid_at", { mode: "date" }),
-  phaseTargetAt: timestamp("phase_target_at", { mode: "date" }),
+  /** Set once submitFeedback() has written the group's MealOutcome, so a repeat call is a no-op. */
+  memorySavedAt: timestamp("memory_saved_at", { mode: "date" }),
   createdAt: timestamp("created_at", { mode: "date" }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { mode: "date" }).notNull().defaultNow(),
 });
@@ -226,6 +237,32 @@ export const tableDiners = pgTable(
       .notNull()
       .references(() => diners.id, { onDelete: "cascade" }),
     joinedAt: timestamp("joined_at", { mode: "date" }).notNull().defaultNow(),
+  },
+  (table) => [primaryKey({ columns: [table.tableId, table.dinerId] })],
+);
+
+/**
+ * Staging area for feedback submitted before every seated diner has
+ * responded — once they all have, table-store.ts turns these into a
+ * MealOutcome via memoryGateway.saveMealOutcome() (which owns the
+ * permanent `feedback` table below, keyed by mealOutcomeId). One row per
+ * (table, diner); a resubmit replaces the prior row.
+ */
+export const tableFeedback = pgTable(
+  "table_feedback",
+  {
+    tableId: text("table_id")
+      .notNull()
+      .references(() => tables.id, { onDelete: "cascade" }),
+    dinerId: text("diner_id")
+      .notNull()
+      .references(() => diners.id),
+    dishId: text("dish_id")
+      .notNull()
+      .references(() => dishes.id),
+    liked: boolean("liked").notNull(),
+    note: text("note"),
+    createdAt: timestamp("created_at", { mode: "date" }).notNull().defaultNow(),
   },
   (table) => [primaryKey({ columns: [table.tableId, table.dinerId] })],
 );
@@ -319,6 +356,7 @@ export const payments = pgTable("payments", {
   stripeSessionId: text("stripe_session_id").unique(),
   amountTotalCents: integer("amount_total_cents").notNull(),
   status: text("status").$type<PaymentStatus>().notNull().default("idle"),
+  confirmationId: text("confirmation_id"),
   failureReason: text("failure_reason"),
   createdAt: timestamp("created_at", { mode: "date" }).notNull().defaultNow(),
   paidAt: timestamp("paid_at", { mode: "date" }),

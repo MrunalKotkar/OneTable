@@ -1,3 +1,4 @@
+import { and, desc, eq } from "drizzle-orm";
 import type {
   BeliefRevision,
   DinerFeedback,
@@ -7,8 +8,22 @@ import type {
   Recommendation,
   Restaurant,
 } from "@/domain/contracts";
+import { db } from "@/db/client";
+import {
+  checkoutSessions,
+  dinerCharges,
+  payments,
+  recommendationChanges,
+  recommendationSelections,
+  recommendations,
+  tableDiners,
+  tableFeedback,
+  tables,
+} from "@/db/schema";
 import { catalogGateway } from "@/features/catalog";
-import { memoryGateway, resetStore } from "@/features/memory";
+import { isMockMemorySelected, memoryGateway, resetStore } from "@/features/memory";
+import { DEMO_DINER_IDS, DEMO_GROUP_ID } from "@/features/memory/demo-group";
+import { resetDemoGroupState } from "@/features/memory/reset-demo-group";
 import { RuleBasedNegotiationEngine } from "@/features/negotiation/engine";
 import type { Phase } from "@/lib/phase";
 import type { CheckoutResult, CheckoutSession } from "@/features/checkout/contract";
@@ -19,26 +34,27 @@ import {
   confirmFeedbackMemoryUpdate,
   createFulfillmentTimeline,
 } from "@/features/fulfillment/simulator";
+import type { PendingAction } from "@/server/elapsed";
+import { deriveDisplayPhase, deriveFulfillmentStatus, derivePaymentDisplayStatus } from "@/server/elapsed";
 
 /**
- * Server-side table state, now backed by the real MemoryGateway (Person 1)
- * and NegotiationEngine (Person 2) instead of fixed fixtures. What remains
- * a stand-in here is only the *table* concept itself (a shareable link with
- * seated diners, phase timing, checkout/fulfillment/feedback) — an
- * in-memory Map on the Next.js server process, lost on restart and unsafe
- * across multiple instances. Diner beliefs and meal history now live in
- * `@/features/memory`'s own store, not here.
+ * Server-side table orchestration, DB-backed (Phase 4 of
+ * PRODUCTION_REBUILD_PLAN.md) — the in-memory Map and setTimeout-driven
+ * phase/fulfillment progression are both gone; see src/server/elapsed.ts
+ * for the elapsed-time derivation that replaced them.
  *
- * All tables recall against the SAME persistent group id (GROUP_ID), not
- * the table's own (per-link, freshly random) id. The table id is just this
- * browser session's shareable link; the group is the recurring
- * Alex/Sam/Jordan/Priya cast whose beliefs and meal history are meant to
- * persist across separate sittings — that is what makes group history and
- * the fresh-session proof genuine rather than reset-per-link.
+ * Every action handler below does its real work (recall, rebalance, belief
+ * revision, payment) *immediately*, writing the true outcome to the DB in
+ * the same request — nothing is scheduled. `getTable` (and every guard
+ * check in this file) then derives what to *display* as a pure function of
+ * "how much time has passed," which is what still gives a fresh table its
+ * few seconds of "recalling... negotiating..." before settling — a serverless
+ * function returning early can never leave the data in a half-finished state.
+ *
+ * All tables recall against the SAME persistent group id (DEMO_GROUP_ID),
+ * not the table's own (per-link, freshly random) id — see
+ * src/features/memory/demo-group.ts.
  */
-
-const GROUP_ID = "demo-group";
-const ALL_DINER_IDS = ["alex", "sam", "jordan", "priya"];
 
 const negotiationEngine = new RuleBasedNegotiationEngine();
 
@@ -73,49 +89,100 @@ export interface TableSnapshot extends TableState {
   restaurants: Restaurant[];
 }
 
-const tables = new Map<string, TableState>();
+type TableRow = typeof tables.$inferSelect;
 
 function makeTableId(): string {
   return Math.random().toString(36).slice(2, 8).toUpperCase();
 }
 
-function schedule(id: string, delayMs: number, mutate: (table: TableState) => void): void {
-  setTimeout(() => {
-    const table = tables.get(id);
-    if (!table) return;
-    mutate(table);
-    table.updatedAt = Date.now();
-  }, delayMs);
+async function loadSeatedDinerIds(tableId: string): Promise<string[]> {
+  const rows = await db
+    .select({ dinerId: tableDiners.dinerId })
+    .from(tableDiners)
+    .where(eq(tableDiners.tableId, tableId))
+    .orderBy(tableDiners.joinedAt);
+  return rows.map((r) => r.dinerId);
 }
 
-/** Same as `schedule`, but for a mutation that itself needs to await the gateway/engine. */
-function scheduleAsync(
-  id: string,
-  delayMs: number,
-  run: (table: TableState) => Promise<void>,
-): void {
-  setTimeout(() => {
-    const table = tables.get(id);
-    if (!table) return;
-    run(table)
-      .catch((error: unknown) => {
-        // Backstop only — runRebalance and reviseJordanBelief already turn
-        // expected failures into phase/errorMessage themselves.
-        table.phase = "error";
-        table.errorMessage = error instanceof Error ? error.message : "Something went wrong.";
-      })
-      .finally(() => {
-        table.updatedAt = Date.now();
-      });
-  }, delayMs);
+async function loadRecommendationRow(
+  row: typeof recommendations.$inferSelect,
+): Promise<Recommendation> {
+  const [selectionRows, changeRows] = await Promise.all([
+    db
+      .select()
+      .from(recommendationSelections)
+      .where(eq(recommendationSelections.recommendationId, row.id)),
+    db.select().from(recommendationChanges).where(eq(recommendationChanges.recommendationId, row.id)),
+  ]);
+
+  return {
+    version: row.version,
+    restaurantId: row.restaurantId,
+    selections: selectionRows.map((s) => ({
+      dinerId: s.dinerId,
+      dishId: s.dishId,
+      price: s.price,
+      reason: s.reason,
+    })),
+    total: row.total,
+    etaMinutes: row.etaMinutes,
+    explanation: row.explanation,
+    alternativeRestaurantId: row.alternativeRestaurantId,
+    changes: changeRows.map((c) => ({ kind: c.kind, summary: c.summary })),
+  };
 }
 
-function restaurantById(id: string): Promise<Restaurant | null> {
-  return catalogGateway.getRestaurant(id);
+/** The latest two recommendation versions for a table — "current" and "previous," same as the old in-memory fields. */
+async function loadRecommendations(
+  tableId: string,
+): Promise<{ current: Recommendation | null; previous: Recommendation | null }> {
+  const rows = await db
+    .select()
+    .from(recommendations)
+    .where(eq(recommendations.tableId, tableId))
+    .orderBy(desc(recommendations.version))
+    .limit(2);
+  const [currentRow, previousRow] = rows;
+  return {
+    current: currentRow ? await loadRecommendationRow(currentRow) : null,
+    previous: previousRow ? await loadRecommendationRow(previousRow) : null,
+  };
 }
 
-function restaurantFor(recommendation: Recommendation): Promise<Restaurant | null> {
-  return restaurantById(recommendation.restaurantId);
+async function persistRecommendation(tableId: string, recommendation: Recommendation): Promise<void> {
+  const [row] = await db
+    .insert(recommendations)
+    .values({
+      tableId,
+      version: recommendation.version,
+      restaurantId: recommendation.restaurantId,
+      total: recommendation.total,
+      etaMinutes: recommendation.etaMinutes,
+      explanation: recommendation.explanation,
+      alternativeRestaurantId: recommendation.alternativeRestaurantId,
+    })
+    .returning();
+
+  if (recommendation.selections.length > 0) {
+    await db.insert(recommendationSelections).values(
+      recommendation.selections.map((s) => ({
+        recommendationId: row.id,
+        dinerId: s.dinerId,
+        dishId: s.dishId,
+        price: s.price,
+        reason: s.reason,
+      })),
+    );
+  }
+  if (recommendation.changes.length > 0) {
+    await db.insert(recommendationChanges).values(
+      recommendation.changes.map((c) => ({
+        recommendationId: row.id,
+        kind: c.kind,
+        summary: c.summary,
+      })),
+    );
+  }
 }
 
 /**
@@ -127,64 +194,70 @@ function restaurantFor(recommendation: Recommendation): Promise<Restaurant | nul
  * below) become the explicit "no feasible result" phase rather than
  * fabricating a recommendation.
  */
-async function runRebalance(table: TableState): Promise<void> {
+async function computeAndPersistRecommendation(
+  tableId: string,
+  seatedDinerIds: string[],
+  intent: string,
+): Promise<{ phase: Phase; errorMessage: string | null }> {
   try {
-    const [context, restaurants] = await Promise.all([
-      memoryGateway.recallGroupContext(GROUP_ID, table.seatedDinerIds, table.intent),
+    const [context, restaurants, { current: previousRecommendation }] = await Promise.all([
+      memoryGateway.recallGroupContext(DEMO_GROUP_ID, seatedDinerIds, intent),
       catalogGateway.listRestaurants(),
+      loadRecommendations(tableId),
     ]);
     const recommendation = await negotiationEngine.rebalance({
       context,
       restaurants,
-      previousRecommendation: table.recommendation ?? undefined,
+      previousRecommendation: previousRecommendation ?? undefined,
     });
-    table.previousRecommendation = table.recommendation;
-    table.recommendation = recommendation;
-    table.phase = "ready";
-    table.errorMessage = null;
+    await persistRecommendation(tableId, recommendation);
+    return { phase: "ready", errorMessage: null };
   } catch (error) {
     // Person 2's engine (src/features/negotiation/engine.ts) throws its own
     // NoFeasibleRestaurantError, a *different class* than the same-named one
     // Person 4 added to negotiation/contract.ts. Checking by `.name` instead
     // of `instanceof` works no matter which of the two ever ends up thrown.
     if (error instanceof Error && error.name === "NoFeasibleRestaurantError") {
-      table.phase = "no_feasible_result";
-      table.errorMessage = error.message;
-    } else {
-      table.phase = "error";
-      table.errorMessage = error instanceof Error ? error.message : "Something went wrong.";
+      return { phase: "no_feasible_result", errorMessage: error.message };
     }
+    return {
+      phase: "error",
+      errorMessage: error instanceof Error ? error.message : "Something went wrong.",
+    };
   }
 }
 
-export function createTable(intent: string): TableState {
+/** Starts a pending action's reveal window, does the real work, then writes the true settled phase. */
+async function runAction(
+  tableId: string,
+  actionKind: PendingAction,
+  intent: string,
+  seatedDinerIds: string[],
+): Promise<void> {
+  const startedAt = new Date();
+  await db
+    .update(tables)
+    .set({ pendingAction: actionKind, actionStartedAt: startedAt, updatedAt: startedAt })
+    .where(eq(tables.id, tableId));
+
+  const { phase, errorMessage } = await computeAndPersistRecommendation(tableId, seatedDinerIds, intent);
+
+  await db
+    .update(tables)
+    .set({ phase, errorMessage, updatedAt: new Date() })
+    .where(eq(tables.id, tableId));
+}
+
+export async function createTable(intent: string): Promise<{ id: string }> {
   const id = makeTableId();
-  const table: TableState = {
-    id,
-    intent,
-    seatedDinerIds: ["alex", "sam", "jordan"],
-    phase: "recalling",
-    recommendation: null,
-    previousRecommendation: null,
-    revision: null,
-    errorMessage: null,
-    approved: false,
-    approvedVersion: null,
-    checkout: null,
-    lastPaymentResult: null,
-    fulfillmentStatus: null,
-    feedback: [],
-    memoryUpdate: null,
-    updatedAt: Date.now(),
-  };
-  tables.set(id, table);
+  const seatedDinerIds = ["alex", "sam", "jordan"];
 
-  schedule(id, 600, (t) => {
-    t.phase = "negotiating";
-  });
-  scheduleAsync(id, 1300, (t) => runRebalance(t));
+  await db.insert(tables).values({ id, groupId: DEMO_GROUP_ID, intent, phase: "recalling" });
+  await db.insert(tableDiners).values(seatedDinerIds.map((dinerId) => ({ tableId: id, dinerId })));
 
-  return table;
+  await runAction(id, "create", intent, seatedDinerIds);
+
+  return { id };
 }
 
 /**
@@ -194,26 +267,30 @@ export function createTable(intent: string): TableState {
  * revision — there is nothing Priya-specific about it now that a real
  * engine computes the recommendation for whichever diners are seated.
  */
-export function joinTable(id: string, dinerId: string): TableState | null {
-  const table = tables.get(id);
-  if (!table) return null;
-  if (table.approved) return table;
-  if (!ALL_DINER_IDS.includes(dinerId)) return table;
-  if (table.seatedDinerIds.includes(dinerId)) return table;
+export async function joinTable(
+  id: string,
+  dinerId: string,
+): Promise<{ ok: true } | { ok: false; reason: string }> {
+  const [row] = await db.select().from(tables).where(eq(tables.id, id));
+  if (!row) return { ok: false, reason: "Table not found." };
+  if (row.approved) return { ok: true };
+  if (!DEMO_DINER_IDS.includes(dinerId)) return { ok: true };
 
-  const shouldRebalance = table.recommendation !== null;
-  table.seatedDinerIds = [...table.seatedDinerIds, dinerId];
-  table.updatedAt = Date.now();
+  const [existing] = await db
+    .select()
+    .from(tableDiners)
+    .where(and(eq(tableDiners.tableId, id), eq(tableDiners.dinerId, dinerId)));
+  if (existing) return { ok: true };
 
-  if (shouldRebalance) {
-    table.phase = "recalling";
-    schedule(id, 400, (t) => {
-      t.phase = "rebalancing";
-    });
-    scheduleAsync(id, 1050, (t) => runRebalance(t));
+  const { current: existingRecommendation } = await loadRecommendations(id);
+  await db.insert(tableDiners).values({ tableId: id, dinerId });
+
+  if (existingRecommendation) {
+    const seatedDinerIds = await loadSeatedDinerIds(id);
+    await runAction(id, "join", row.intent, seatedDinerIds);
   }
 
-  return table;
+  return { ok: true };
 }
 
 /**
@@ -223,52 +300,73 @@ export function joinTable(id: string, dinerId: string): TableState | null {
  * straight from the gateway's own supersession logic), then the same
  * rebalance path re-runs.
  */
-export function reviseJordanBelief(id: string): TableState | null {
-  const table = tables.get(id);
-  if (!table) return null;
-  if (table.approved) return table;
-  if (!table.seatedDinerIds.includes("jordan")) return table;
-  if (table.revision) return table;
+export async function reviseJordanBelief(
+  id: string,
+): Promise<{ ok: true } | { ok: false; reason: string }> {
+  const [row] = await db.select().from(tables).where(eq(tables.id, id));
+  if (!row) return { ok: false, reason: "Table not found." };
+  if (row.approved) return { ok: true };
+  if (row.lastRevision) return { ok: true };
 
-  table.phase = "revising_belief";
-  table.updatedAt = Date.now();
+  const seatedDinerIds = await loadSeatedDinerIds(id);
+  if (!seatedDinerIds.includes("jordan")) return { ok: true };
 
-  scheduleAsync(id, 550, async (t) => {
-    const revision = await memoryGateway.reviseBelief({
-      dinerId: "jordan",
-      sessionId: id,
-      kind: "allergy",
-      value: "shellfish",
-      correctionText: "Actually I'm allergic to shellfish.",
-    });
-    t.revision = revision;
-    t.phase = "recalling";
+  const startedAt = new Date();
+  await db
+    .update(tables)
+    .set({ phase: "revising_belief", pendingAction: "revise", actionStartedAt: startedAt, updatedAt: startedAt })
+    .where(eq(tables.id, id));
+
+  const revision = await memoryGateway.reviseBelief({
+    dinerId: "jordan",
+    sessionId: id,
+    kind: "allergy",
+    value: "shellfish",
+    correctionText: "Actually I'm allergic to shellfish.",
   });
-  schedule(id, 950, (t) => {
-    t.phase = "rebalancing";
-  });
-  scheduleAsync(id, 1600, (t) => runRebalance(t));
+  await db.update(tables).set({ lastRevision: revision, updatedAt: new Date() }).where(eq(tables.id, id));
 
-  return table;
+  const { phase, errorMessage } = await computeAndPersistRecommendation(id, seatedDinerIds, row.intent);
+  await db.update(tables).set({ phase, errorMessage, updatedAt: new Date() }).where(eq(tables.id, id));
+
+  return { ok: true };
 }
 
 /**
  * Approving locks the table: no further joins or belief revisions, and
  * the recommendation version at this moment becomes the only one
- * checkout will accept. Errors here are reported via a discriminated
- * return rather than a thrown exception, since API routes need to map
- * "not ready yet" to a 409 without a try/catch at every call site.
+ * checkout will accept. Gates on the DISPLAYED phase (elapsed-time
+ * derived), not the raw stored one, so a client can never approve a
+ * recommendation it hasn't actually been shown yet — same guarantee the
+ * old setTimeout version gave for free by construction.
  */
-export function approveTable(id: string): { ok: true; table: TableState } | { ok: false; reason: string } {
-  const table = tables.get(id);
-  if (!table) return { ok: false, reason: "Table not found." };
-  if (table.phase !== "ready" || !table.recommendation) {
+export async function approveTable(
+  id: string,
+): Promise<{ ok: true } | { ok: false; reason: string }> {
+  const [row] = await db.select().from(tables).where(eq(tables.id, id));
+  if (!row) return { ok: false, reason: "Table not found." };
+
+  const displayPhase = deriveDisplayPhase(row.phase, row.pendingAction, row.actionStartedAt, new Date());
+  const { current: recommendation } = await loadRecommendations(id);
+  if (displayPhase !== "ready" || !recommendation) {
     return { ok: false, reason: "No ready recommendation to approve yet." };
   }
-  table.approved = true;
-  table.approvedVersion = table.recommendation.version;
-  table.updatedAt = Date.now();
-  return { ok: true, table };
+
+  await db
+    .update(tables)
+    .set({ approved: true, approvedVersion: recommendation.version, updatedAt: new Date() })
+    .where(eq(tables.id, id));
+  return { ok: true };
+}
+
+async function loadRawCheckoutSessionRow(tableId: string): Promise<typeof checkoutSessions.$inferSelect | null> {
+  const [row] = await db
+    .select()
+    .from(checkoutSessions)
+    .where(eq(checkoutSessions.tableId, tableId))
+    .orderBy(desc(checkoutSessions.createdAt))
+    .limit(1);
+  return row ?? null;
 }
 
 /**
@@ -278,23 +376,30 @@ export function approveTable(id: string): { ok: true; table: TableState } | { ok
  */
 export async function startCheckout(
   id: string,
-): Promise<{ ok: true; table: TableState } | { ok: false; reason: string }> {
-  const table = tables.get(id);
-  if (!table) return { ok: false, reason: "Table not found." };
-  if (!table.approved || !table.recommendation || table.approvedVersion === null) {
+): Promise<{ ok: true } | { ok: false; reason: string }> {
+  const [row] = await db.select().from(tables).where(eq(tables.id, id));
+  if (!row) return { ok: false, reason: "Table not found." };
+  if (!row.approved || row.approvedVersion === null) {
     return { ok: false, reason: "Approve a recommendation before checkout." };
   }
-  if (table.checkout) return { ok: true, table };
+
+  const existing = await loadRawCheckoutSessionRow(id);
+  if (existing) return { ok: true };
+
+  const { current: recommendation } = await loadRecommendations(id);
+  if (!recommendation) {
+    return { ok: false, reason: "Approve a recommendation before checkout." };
+  }
 
   const session = createCheckoutSession({
-    recommendation: table.recommendation,
-    latestApprovedVersion: table.approvedVersion,
+    recommendation,
+    latestApprovedVersion: row.approvedVersion,
   });
 
   // Person 4's simulator labels "main" line items with the raw dishId
   // (it has no restaurant to resolve names against). Relabel with the
   // actual dish name here, since we do have the restaurant.
-  const restaurant = await restaurantFor(table.recommendation);
+  const restaurant = await catalogGateway.getRestaurant(recommendation.restaurantId);
   if (restaurant) {
     const dishNameById = new Map(restaurant.menu.map((dish) => [dish.id, dish.name]));
     session.dinerCharges = session.dinerCharges.map((charge) => ({
@@ -307,150 +412,333 @@ export async function startCheckout(
     }));
   }
 
-  table.checkout = session;
-  table.updatedAt = Date.now();
-  return { ok: true, table };
+  await db.insert(checkoutSessions).values({
+    id: session.id,
+    tableId: id,
+    recommendationVersion: session.recommendationVersion,
+    latestApprovedVersion: session.latestApprovedVersion,
+    status: session.status,
+    groupTotalCents: session.groupTotalCents,
+    invalidatedReason: session.invalidatedReason,
+  });
+  if (session.dinerCharges.length > 0) {
+    await db.insert(dinerCharges).values(
+      session.dinerCharges.map((charge) => ({
+        checkoutSessionId: session.id,
+        dinerId: charge.dinerId,
+        totalCents: charge.totalCents,
+        lineItems: charge.lineItems,
+      })),
+    );
+  }
+
+  return { ok: true };
 }
 
 /**
- * Simulates payment. "Processing" is set immediately so pollers see it,
- * then the real transition lands shortly after (matching the rest of
- * this store's phase-timing feel).
+ * Simulates payment. The row is written with its real, final status
+ * immediately (see src/server/elapsed.ts's derivePaymentDisplayStatus for
+ * the brief "processing" reveal delay this produces on read).
  *
- * Guards against a quirk in Person 4's simulatePayment: its failCheckout
- * helper forces the returned session to status "failed" even for the
- * "already paid" / "already processing" rejection branches. Applying
- * that blindly would let a duplicate Pay click flip a genuinely
- * completed payment back to "failed". So once a session has already
- * settled (paid or mid-processing), we keep it as the source of truth
- * and only surface the rejection result — we never overwrite it.
+ * Every attempt becomes its own `payments` row — including a duplicate
+ * Pay click against an already-paid session, recorded as a rejected
+ * attempt rather than silently ignored or (worse) flipping a genuinely
+ * completed payment back to "failed" the way a naive re-run of the
+ * simulator would.
  */
-export function payForTable(
+export async function payForTable(
   id: string,
   options?: { forceFailure?: boolean },
-): { ok: true; table: TableState } | { ok: false; reason: string } {
-  const table = tables.get(id);
-  if (!table) return { ok: false, reason: "Table not found." };
-  if (!table.checkout) return { ok: false, reason: "Start checkout before paying." };
+): Promise<{ ok: true } | { ok: false; reason: string }> {
+  const [row] = await db.select().from(tables).where(eq(tables.id, id));
+  if (!row) return { ok: false, reason: "Table not found." };
 
-  const alreadySettled = table.checkout.status === "paid" || table.checkout.status === "processing";
+  const checkoutRow = await loadRawCheckoutSessionRow(id);
+  if (!checkoutRow) return { ok: false, reason: "Start checkout before paying." };
 
-  if (alreadySettled) {
-    const transition = simulatePayment({ session: table.checkout });
-    table.lastPaymentResult = transition.result;
-    table.updatedAt = Date.now();
-    return { ok: true, table };
+  if (checkoutRow.status === "paid") {
+    await db.insert(payments).values({
+      checkoutSessionId: checkoutRow.id,
+      amountTotalCents: checkoutRow.groupTotalCents,
+      status: "failed",
+      failureReason: "Payment already completed.",
+    });
+    return { ok: true };
   }
 
-  const sessionForAttempt = table.checkout;
-  table.checkout = { ...table.checkout, status: "processing" };
-  table.updatedAt = Date.now();
+  const chargeRows = await db
+    .select()
+    .from(dinerCharges)
+    .where(eq(dinerCharges.checkoutSessionId, checkoutRow.id));
+  const session: CheckoutSession = {
+    id: checkoutRow.id,
+    recommendationVersion: checkoutRow.recommendationVersion,
+    latestApprovedVersion: checkoutRow.latestApprovedVersion,
+    status: checkoutRow.status,
+    dinerCharges: chargeRows.map((c) => ({
+      dinerId: c.dinerId,
+      lineItems: c.lineItems,
+      totalCents: c.totalCents,
+    })),
+    groupTotalCents: checkoutRow.groupTotalCents,
+    createdAt: checkoutRow.createdAt.toISOString(),
+    invalidatedReason: checkoutRow.invalidatedReason,
+  };
 
-  scheduleAsync(id, 700, async (t) => {
-    const transition = simulatePayment({
-      session: sessionForAttempt,
-      forceFailure: options?.forceFailure,
-    });
-    t.checkout = transition.completedSession;
-    t.lastPaymentResult = transition.result;
+  const transition = simulatePayment({ session, forceFailure: options?.forceFailure });
 
-    if (transition.result.status === "paid") {
-      t.fulfillmentStatus = "submitted";
-      const restaurant = t.recommendation ? await restaurantFor(t.recommendation) : null;
-      if (restaurant && t.recommendation) {
-        const steps: FulfillmentStatus[] = [
-          "accepted",
-          "preparing",
-          "ready",
-          "out_for_delivery",
-          "completed",
-        ];
-        steps.forEach((status, index) => {
-          schedule(id, 900 * (index + 1), (tt) => {
-            tt.fulfillmentStatus = status;
-          });
-        });
-      }
-    }
+  await db.insert(payments).values({
+    checkoutSessionId: checkoutRow.id,
+    amountTotalCents: checkoutRow.groupTotalCents,
+    status: transition.result.status,
+    confirmationId: transition.result.confirmationId ?? null,
+    failureReason: transition.result.failureReason ?? null,
   });
+  await db
+    .update(checkoutSessions)
+    .set({ status: transition.completedSession.status })
+    .where(eq(checkoutSessions.id, checkoutRow.id));
 
-  return { ok: true, table };
+  if (transition.result.status === "paid") {
+    await db.update(tables).set({ paidAt: new Date(), updatedAt: new Date() }).where(eq(tables.id, id));
+  }
+
+  return { ok: true };
+}
+
+async function loadCheckoutDisplay(
+  tableId: string,
+  now: Date,
+): Promise<{ session: CheckoutSession | null; lastPaymentResult: CheckoutResult | null }> {
+  const sessionRow = await loadRawCheckoutSessionRow(tableId);
+  if (!sessionRow) return { session: null, lastPaymentResult: null };
+
+  const [chargeRows, paymentRows] = await Promise.all([
+    db.select().from(dinerCharges).where(eq(dinerCharges.checkoutSessionId, sessionRow.id)),
+    db
+      .select()
+      .from(payments)
+      .where(eq(payments.checkoutSessionId, sessionRow.id))
+      .orderBy(desc(payments.createdAt)),
+  ]);
+
+  // Latest attempt overall — including a rejected duplicate Pay click —
+  // drives `lastPaymentResult`, so the UI can tell the user *that* click
+  // did nothing new. But the session's own displayed status must never
+  // flicker because of a rejected duplicate: it's anchored to whichever
+  // attempt actually produced the session's real, current status (a
+  // duplicate-paid rejection is always "failed" and never touches
+  // checkout_sessions.status — see payForTable).
+  const latestPaymentRow = paymentRows[0] ?? null;
+  const settlingPaymentRow = paymentRows.find((p) => p.status === sessionRow.status) ?? null;
+
+  const sessionDisplayStatus = derivePaymentDisplayStatus(
+    sessionRow.status,
+    settlingPaymentRow?.createdAt ?? now,
+    now,
+  );
+  const paymentDisplayStatus = latestPaymentRow
+    ? derivePaymentDisplayStatus(latestPaymentRow.status, latestPaymentRow.createdAt, now)
+    : null;
+
+  const session: CheckoutSession = {
+    id: sessionRow.id,
+    recommendationVersion: sessionRow.recommendationVersion,
+    latestApprovedVersion: sessionRow.latestApprovedVersion,
+    status: sessionDisplayStatus,
+    dinerCharges: chargeRows
+      .map((c) => ({ dinerId: c.dinerId, lineItems: c.lineItems, totalCents: c.totalCents }))
+      .sort((a, b) => a.dinerId.localeCompare(b.dinerId)),
+    groupTotalCents: sessionRow.groupTotalCents,
+    createdAt: sessionRow.createdAt.toISOString(),
+    invalidatedReason: sessionRow.invalidatedReason,
+  };
+
+  const lastPaymentResult: CheckoutResult | null =
+    latestPaymentRow && paymentDisplayStatus
+      ? {
+          recommendationVersion: sessionRow.recommendationVersion,
+          status: paymentDisplayStatus,
+          confirmationId:
+            paymentDisplayStatus === "paid" ? (latestPaymentRow.confirmationId ?? undefined) : undefined,
+          failureReason:
+            paymentDisplayStatus === "failed" ? (latestPaymentRow.failureReason ?? undefined) : undefined,
+        }
+      : null;
+
+  return { session, lastPaymentResult };
 }
 
 /**
  * One diner submits their own feedback. Only allowed once fulfillment has
  * completed. Once every seated diner has responded, builds the
  * MealOutcome and writes it back through the real MemoryGateway (scoped
- * to the persistent GROUP_ID, not this table's own id) — so a later
+ * to the persistent DEMO_GROUP_ID, not this table's own id) — so a later
  * fresh-session lookup, or even a brand-new table with the same group,
- * genuinely reflects it. This is async because the plan requires waiting
- * for confirmed save before showing "memory updated."
+ * genuinely reflects it.
  */
 export async function submitFeedback(
   id: string,
   dinerId: string,
   liked: boolean,
   note?: string,
-): Promise<{ ok: true; table: TableState } | { ok: false; reason: string }> {
-  const table = tables.get(id);
-  if (!table) return { ok: false, reason: "Table not found." };
-  if (table.fulfillmentStatus !== "completed") {
+): Promise<{ ok: true } | { ok: false; reason: string }> {
+  const [row] = await db.select().from(tables).where(eq(tables.id, id));
+  if (!row) return { ok: false, reason: "Table not found." };
+
+  const fulfillmentStatus = deriveFulfillmentStatus(row.paidAt, new Date());
+  if (fulfillmentStatus !== "completed") {
     return { ok: false, reason: "Feedback opens once fulfillment is completed." };
   }
-  if (!table.seatedDinerIds.includes(dinerId)) {
+
+  const seatedDinerIds = await loadSeatedDinerIds(id);
+  if (!seatedDinerIds.includes(dinerId)) {
     return { ok: false, reason: "This diner is not at the table." };
   }
-  const selection = table.recommendation?.selections.find((s) => s.dinerId === dinerId);
+
+  const { current: recommendation } = await loadRecommendations(id);
+  const selection = recommendation?.selections.find((s) => s.dinerId === dinerId);
   if (!selection) return { ok: false, reason: "No selection on file for this diner." };
 
-  const withoutExisting = table.feedback.filter((f) => f.dinerId !== dinerId);
-  table.feedback = [...withoutExisting, { dinerId, dishId: selection.dishId, liked, note }];
-  table.updatedAt = Date.now();
-
-  const allResponded = table.seatedDinerIds.every((seatedId) =>
-    table.feedback.some((f) => f.dinerId === seatedId),
-  );
-
-  if (allResponded && table.recommendation && !table.memoryUpdate) {
-    const completedAt = new Date().toISOString();
-    const outcome = buildMealOutcome({
-      groupId: GROUP_ID,
-      recommendation: table.recommendation,
-      feedback: table.feedback,
-      completedAt,
-      currentStatus: table.fulfillmentStatus,
+  await db
+    .insert(tableFeedback)
+    .values({ tableId: id, dinerId, dishId: selection.dishId, liked, note: note ?? null })
+    .onConflictDoUpdate({
+      target: [tableFeedback.tableId, tableFeedback.dinerId],
+      set: { dishId: selection.dishId, liked, note: note ?? null },
     });
-    await memoryGateway.saveMealOutcome(outcome);
-    table.memoryUpdate = confirmFeedbackMemoryUpdate({ outcome, savedAt: completedAt });
-    table.updatedAt = Date.now();
+
+  if (!row.memorySavedAt && recommendation) {
+    const feedbackRows = await db.select().from(tableFeedback).where(eq(tableFeedback.tableId, id));
+    const allResponded = seatedDinerIds.every((seatedId) =>
+      feedbackRows.some((f) => f.dinerId === seatedId),
+    );
+
+    if (allResponded) {
+      const completedAt = new Date().toISOString();
+      const outcome = buildMealOutcome({
+        groupId: DEMO_GROUP_ID,
+        recommendation,
+        feedback: feedbackRows.map((f) => ({
+          dinerId: f.dinerId,
+          dishId: f.dishId,
+          liked: f.liked,
+          note: f.note ?? undefined,
+        })),
+        completedAt,
+        currentStatus: fulfillmentStatus,
+      });
+      await memoryGateway.saveMealOutcome(outcome);
+      await db
+        .update(tables)
+        .set({ memorySavedAt: new Date(completedAt), updatedAt: new Date() })
+        .where(eq(tables.id, id));
+    }
   }
 
-  return { ok: true, table };
+  return { ok: true };
+}
+
+interface SnapshotParts {
+  seatedDinerIds: string[];
+  displayPhase: Phase;
+  recommendation: Recommendation | null;
+  previousRecommendation: Recommendation | null;
+  fulfillmentStatus: FulfillmentStatus | null;
+  checkout: CheckoutSession | null;
+  lastPaymentResult: CheckoutResult | null;
+  feedback: DinerFeedback[];
+  memoryUpdate: FeedbackMemoryUpdate | null;
+}
+
+function toTableSnapshotBase(
+  row: TableRow,
+  parts: SnapshotParts,
+): Omit<TableState, "diners" | "restaurants" | "fulfillmentTimeline"> {
+  return {
+    id: row.id,
+    intent: row.intent,
+    seatedDinerIds: parts.seatedDinerIds,
+    phase: parts.displayPhase,
+    recommendation: parts.recommendation,
+    previousRecommendation: parts.previousRecommendation,
+    revision: row.lastRevision ?? null,
+    errorMessage: row.errorMessage,
+    approved: row.approved,
+    approvedVersion: row.approvedVersion,
+    checkout: parts.checkout,
+    lastPaymentResult: parts.lastPaymentResult,
+    fulfillmentStatus: parts.fulfillmentStatus,
+    feedback: parts.feedback,
+    memoryUpdate: parts.memoryUpdate,
+    updatedAt: row.updatedAt.getTime(),
+  };
 }
 
 export async function getTable(id: string): Promise<TableSnapshot | null> {
-  const table = tables.get(id);
-  if (!table) return null;
+  const [row] = await db.select().from(tables).where(eq(tables.id, id));
+  if (!row) return null;
+
+  const now = new Date();
+  const seatedDinerIds = await loadSeatedDinerIds(id);
+  const { current: recommendation, previous: previousRecommendation } = await loadRecommendations(id);
 
   const relevantRestaurantIds = [
-    table.recommendation?.restaurantId,
-    table.recommendation?.alternativeRestaurantId,
+    recommendation?.restaurantId,
+    recommendation?.alternativeRestaurantId,
   ].filter((rid): rid is string => rid !== null && rid !== undefined);
 
-  const [context, restaurants] = await Promise.all([
-    memoryGateway.recallGroupContext(GROUP_ID, table.seatedDinerIds, table.intent),
+  const [context, restaurants, checkoutDisplay, feedbackRows] = await Promise.all([
+    memoryGateway.recallGroupContext(DEMO_GROUP_ID, seatedDinerIds, row.intent),
     catalogGateway.getRestaurants(relevantRestaurantIds),
+    loadCheckoutDisplay(id, now),
+    db.select().from(tableFeedback).where(eq(tableFeedback.tableId, id)),
   ]);
 
-  const restaurant = table.recommendation
-    ? (restaurants.find((r) => r.id === table.recommendation?.restaurantId) ?? null)
+  const displayPhase = deriveDisplayPhase(row.phase, row.pendingAction, row.actionStartedAt, now);
+  const fulfillmentStatus = deriveFulfillmentStatus(row.paidAt, now);
+
+  const restaurant = recommendation
+    ? (restaurants.find((r) => r.id === recommendation.restaurantId) ?? null)
     : null;
   const fulfillmentTimeline =
-    table.recommendation && restaurant && table.fulfillmentStatus
-      ? createFulfillmentTimeline(table.recommendation, restaurant, table.fulfillmentStatus)
+    recommendation && restaurant && fulfillmentStatus
+      ? createFulfillmentTimeline(recommendation, restaurant, fulfillmentStatus)
       : null;
+
+  const feedback: DinerFeedback[] = feedbackRows.map((f) => ({
+    dinerId: f.dinerId,
+    dishId: f.dishId,
+    liked: f.liked,
+    note: f.note ?? undefined,
+  }));
+
+  const memoryUpdate: FeedbackMemoryUpdate | null =
+    row.memorySavedAt && recommendation
+      ? confirmFeedbackMemoryUpdate({
+          outcome: buildMealOutcome({
+            groupId: DEMO_GROUP_ID,
+            recommendation,
+            feedback,
+            completedAt: row.memorySavedAt.toISOString(),
+            currentStatus: fulfillmentStatus ?? undefined,
+          }),
+          savedAt: row.memorySavedAt.toISOString(),
+        })
+      : null;
+
   return {
-    ...table,
+    ...toTableSnapshotBase(row, {
+      seatedDinerIds,
+      displayPhase,
+      recommendation,
+      previousRecommendation,
+      fulfillmentStatus,
+      checkout: checkoutDisplay.session,
+      lastPaymentResult: checkoutDisplay.lastPaymentResult,
+      feedback,
+      memoryUpdate,
+    }),
     diners: context.diners,
     fulfillmentTimeline,
     restaurants,
@@ -458,12 +746,12 @@ export async function getTable(id: string): Promise<TableSnapshot | null> {
 }
 
 export async function getAllDinerProfiles(): Promise<DinerProfile[]> {
-  const context = await memoryGateway.recallGroupContext(GROUP_ID, ALL_DINER_IDS, "");
+  const context = await memoryGateway.recallGroupContext(DEMO_GROUP_ID, DEMO_DINER_IDS, "");
   return context.diners;
 }
 
 export async function getDinerProfile(id: string): Promise<DinerProfile | null> {
-  const context = await memoryGateway.recallGroupContext(GROUP_ID, [id], "");
+  const context = await memoryGateway.recallGroupContext(DEMO_GROUP_ID, [id], "");
   return context.diners[0] ?? null;
 }
 
@@ -473,7 +761,7 @@ export async function getDinerProfile(id: string): Promise<DinerProfile | null> 
  * Resolved here against the catalog for anything rendering this list.
  */
 export async function getGroupHistory(): Promise<GroupMealSummary[]> {
-  const context = await memoryGateway.recallGroupContext(GROUP_ID, ALL_DINER_IDS, "");
+  const context = await memoryGateway.recallGroupContext(DEMO_GROUP_ID, DEMO_DINER_IDS, "");
   const restaurantIds = context.history.map((meal) => meal.restaurant);
   const restaurants = await catalogGateway.getRestaurants(restaurantIds);
   const nameById = new Map(restaurants.map((r) => [r.id, r.name]));
@@ -483,8 +771,17 @@ export async function getGroupHistory(): Promise<GroupMealSummary[]> {
   }));
 }
 
-/** Demo-rehearsal reset: clears every table and restores seed beliefs/history. */
-export function resetAll(): void {
-  resetStore();
-  tables.clear();
+/**
+ * Demo-rehearsal reset: clears every table (cascades to its diners,
+ * recommendations, checkout/payments, and feedback) and restores the demo
+ * group's seed beliefs/history — in Postgres when the DB gateway backs
+ * memory, or the mock's own module state when MEMORY_PROVIDER=mock.
+ */
+export async function resetAll(): Promise<void> {
+  if (isMockMemorySelected()) {
+    resetStore();
+  } else {
+    await resetDemoGroupState();
+  }
+  await db.delete(tables);
 }

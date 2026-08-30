@@ -9,21 +9,21 @@ export { resetStore } from "./store";
 
 /**
  * Pick the live provider. DB-backed whenever DATABASE_URL is configured
- * (the real deployed path); otherwise the deterministic in-process mock —
- * also the offline-safe fallback for local dev without a DB, and
- * `MEMORY_PROVIDER=mock` forces it even with a DATABASE_URL present (handy
- * for quickly comparing behavior against the mock).
+ * (the real deployed path, and the only path since Phase 4 — table-store.ts
+ * itself requires a DB now); otherwise the deterministic in-process mock.
+ * `MEMORY_PROVIDER=mock` forces the mock even with a DATABASE_URL present,
+ * for quickly comparing behavior against it.
  *
  * Called at request time (not memoized) so it always reflects the current
  * env, same as the pre-DB version of this file did for XTrace.
  */
+export function isMockMemorySelected(): boolean {
+  return process.env.MEMORY_PROVIDER?.toLowerCase() === "mock";
+}
+
 export function selectMemoryGateway(): MemoryGateway {
-  if (process.env.MEMORY_PROVIDER?.toLowerCase() === "mock") {
-    return mockMemoryGateway;
-  }
-  if (process.env.DATABASE_URL) {
-    return dbMemoryGateway;
-  }
+  if (isMockMemorySelected()) return mockMemoryGateway;
+  if (process.env.DATABASE_URL) return dbMemoryGateway;
   return mockMemoryGateway;
 }
 

@@ -7,20 +7,19 @@
  * gateway switch from static imports / the in-memory mock to the DB
  * (Phases 2 and 3 of PRODUCTION_REBUILD_PLAN.md).
  *
- * The "demo-group" id and the four diner ids ("alex"/"sam"/"jordan"/"priya")
- * match the constants table-store.ts hardcodes (GROUP_ID, ALL_DINER_IDS) —
- * both go away once Phase 5 replaces the fixed cast with real accounts.
- *
- * Idempotent: safe to run again after editing either fixture (upserts by id).
+ * Upsert-only and deliberately non-destructive — safe to run again anytime
+ * (e.g. against a populated prod DB after editing a fixture) since it never
+ * deletes a belief, unlike resetDemoGroupState() in
+ * src/features/memory/reset-demo-group.ts, which is a *destructive* reset
+ * used only by table-store.ts's "restart demo" action.
  *
  *   npm run db:seed
  */
 import { demoDiners } from "@/data/demo-fixtures";
 import { demoRestaurants } from "@/data/restaurant-catalog";
+import { DEMO_GROUP_ID } from "@/features/memory/demo-group";
 import { db } from "./client";
 import { beliefs, dishes, diners, groupMembers, groups, restaurants } from "./schema";
-
-const DEMO_GROUP_ID = "demo-group";
 
 async function seedCatalog() {
   for (const restaurant of demoRestaurants) {

@@ -7,10 +7,11 @@ This repository is intentionally a minimal boilerplate. It contains shared contr
 ## Start locally
 
 1. Install dependencies with `npm install`.
-2. Duplicate `.env.example` as `.env.local`.
-3. Set `DATABASE_URL` (see `docker-compose.yml` for local Postgres) to use the real DB-backed memory gateway, or leave it unset / set `MEMORY_PROVIDER=mock` to run against the in-memory mock instead.
-4. Run `npm run dev`.
-5. Open `http://localhost:3000`.
+2. Start a local Postgres with `docker compose up -d` (see `docker-compose.yml`), then duplicate `.env.example` as `.env.local` and set `DATABASE_URL` — required from Phase 4 on, since table orchestration itself is DB-backed now, not just memory/catalog.
+3. `npm run db:migrate && npm run db:seed`.
+4. `npm run dev`, then open `http://localhost:3000`.
+
+Set `MEMORY_PROVIDER=mock` to run belief/history recall against the in-memory mock instead of Postgres (handy for comparing behavior) — tables/checkout/fulfillment always use the DB regardless.
 
 ## Team ownership
 

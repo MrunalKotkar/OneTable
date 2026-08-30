@@ -6,9 +6,9 @@ export async function POST(
   { params }: { params: Promise<{ id: string }> },
 ) {
   const { id } = await params;
-  const table = reviseJordanBelief(id);
-  if (!table) {
-    return NextResponse.json({ error: "not_found" }, { status: 404 });
+  const result = await reviseJordanBelief(id);
+  if (!result.ok) {
+    return NextResponse.json({ error: "not_found", message: result.reason }, { status: 404 });
   }
   return NextResponse.json(await getTable(id));
 }

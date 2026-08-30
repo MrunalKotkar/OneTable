@@ -8,7 +8,7 @@ export async function POST(
   const { id } = await params;
   const body = await request.json().catch(() => ({}));
   const forceFailure = body?.forceFailure === true;
-  const result = payForTable(id, { forceFailure });
+  const result = await payForTable(id, { forceFailure });
   if (!result.ok) {
     const status = result.reason === "Table not found." ? 404 : 409;
     return NextResponse.json({ error: "cannot_pay", message: result.reason }, { status });

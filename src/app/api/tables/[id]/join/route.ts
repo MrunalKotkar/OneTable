@@ -8,9 +8,9 @@ export async function POST(
   const { id } = await params;
   const body = await request.json().catch(() => ({}));
   const dinerId = typeof body?.dinerId === "string" ? body.dinerId : "";
-  const table = joinTable(id, dinerId);
-  if (!table) {
-    return NextResponse.json({ error: "not_found" }, { status: 404 });
+  const result = await joinTable(id, dinerId);
+  if (!result.ok) {
+    return NextResponse.json({ error: "not_found", message: result.reason }, { status: 404 });
   }
   return NextResponse.json(await getTable(id));
 }
