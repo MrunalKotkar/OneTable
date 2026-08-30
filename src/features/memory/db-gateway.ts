@@ -87,11 +87,12 @@ export const dbMemoryGateway: MemoryGateway = {
     dinerIds: string[],
     intent: string,
   ): Promise<GroupContext> {
-    if (dinerIds.length === 0) {
-      return { groupId, intent, diners: [], history: [] };
-    }
-
-    const dinerRows = await db.select().from(diners).where(inArray(diners.id, dinerIds));
+    // dinerIds can legitimately be empty — table-store.ts's getGroupHistory
+    // calls this with [] specifically to get `history` back with no diner
+    // lookup at all, so that (and NOT an early return skipping history
+    // entirely) is what has to handle the empty case.
+    const dinerRows =
+      dinerIds.length === 0 ? [] : await db.select().from(diners).where(inArray(diners.id, dinerIds));
 
     const dinerProfiles: DinerProfile[] = await Promise.all(
       dinerRows.map(async (row) => ({

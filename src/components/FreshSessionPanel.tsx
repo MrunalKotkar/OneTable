@@ -25,8 +25,7 @@ export function FreshSessionPanel({ diners, history, revision }: FreshSessionPan
 
       <div className="dinerRoster">
         {diners.map((diner) => {
-          const isJordan = diner.id === "jordan";
-          const corrected = isJordan && revision !== null;
+          const corrected = revision !== null && diner.id === revision.dinerId;
           return (
             <article
               key={diner.id}

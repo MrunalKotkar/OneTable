@@ -1,10 +1,15 @@
 import { NextResponse } from "next/server";
-import { isAdminRequest } from "@/lib/admin-auth";
+import { auth } from "@/auth";
 
-/** Shared gate for every /api/admin/** route. See src/lib/admin-auth.ts for why this is a cookie, not a session. */
+/**
+ * Shared gate for every /api/admin/** route. middleware.ts already turns
+ * away a non-admin request before it gets here (Phase 5's real
+ * users.is_admin session check, replacing Phase 2's temporary
+ * ADMIN_SECRET cookie) — this is defense-in-depth, not the primary gate.
+ */
 export async function requireAdmin(): Promise<NextResponse | null> {
-  const authorized = await isAdminRequest();
-  if (!authorized) {
+  const session = await auth();
+  if (!session?.user?.isAdmin) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
   return null;

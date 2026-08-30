@@ -122,9 +122,9 @@ export const groups = pgTable("groups", {
   id: text("id")
     .primaryKey()
     .$defaultFn(() => crypto.randomUUID()),
-  ownerDinerId: text("owner_diner_id").references(() => diners.id, {
-    onDelete: "set null",
-  }),
+  ownerDinerId: text("owner_diner_id")
+    .references(() => diners.id, { onDelete: "set null" })
+    .unique(),
   createdAt: timestamp("created_at", { mode: "date" }).notNull().defaultNow(),
 });
 

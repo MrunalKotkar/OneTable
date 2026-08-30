@@ -29,6 +29,13 @@
       "when": 1788112216902,
       "tag": "0003_bouncy_doctor_octopus",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1788115948693,
+      "tag": "0004_red_shaman",
+      "breakpoints": true
     }
   ]
 }

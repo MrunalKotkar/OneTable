@@ -1,5 +1,6 @@
 import { and, desc, eq } from "drizzle-orm";
 import type {
+  BeliefKind,
   BeliefRevision,
   DinerFeedback,
   DinerProfile,
@@ -12,6 +13,7 @@ import { db } from "@/db/client";
 import {
   checkoutSessions,
   dinerCharges,
+  groupMembers,
   payments,
   recommendationChanges,
   recommendationSelections,
@@ -22,10 +24,10 @@ import {
 } from "@/db/schema";
 import { catalogGateway } from "@/features/catalog";
 import { isMockMemorySelected, memoryGateway, resetStore } from "@/features/memory";
-import { DEMO_DINER_IDS, DEMO_GROUP_ID } from "@/features/memory/demo-group";
 import { resetDemoGroupState } from "@/features/memory/reset-demo-group";
 import { RuleBasedNegotiationEngine } from "@/features/negotiation/engine";
 import type { Phase } from "@/lib/phase";
+import { getOrCreateGroupForDiner } from "@/server/identity";
 import type { CheckoutResult, CheckoutSession } from "@/features/checkout/contract";
 import { createCheckoutSession, simulatePayment } from "@/features/checkout/simulator";
 import type { FeedbackMemoryUpdate, FulfillmentStep } from "@/features/fulfillment/contract";
@@ -51,9 +53,9 @@ import { deriveDisplayPhase, deriveFulfillmentStatus, derivePaymentDisplayStatus
  * few seconds of "recalling... negotiating..." before settling — a serverless
  * function returning early can never leave the data in a half-finished state.
  *
- * All tables recall against the SAME persistent group id (DEMO_GROUP_ID),
+ * Every table recalls against its creator's own recurring group (Phase 5),
  * not the table's own (per-link, freshly random) id — see
- * src/features/memory/demo-group.ts.
+ * src/server/identity.ts's getOrCreateGroupForDiner.
  */
 
 const negotiationEngine = new RuleBasedNegotiationEngine();
@@ -196,12 +198,13 @@ async function persistRecommendation(tableId: string, recommendation: Recommenda
  */
 async function computeAndPersistRecommendation(
   tableId: string,
+  groupId: string,
   seatedDinerIds: string[],
   intent: string,
 ): Promise<{ phase: Phase; errorMessage: string | null }> {
   try {
     const [context, restaurants, { current: previousRecommendation }] = await Promise.all([
-      memoryGateway.recallGroupContext(DEMO_GROUP_ID, seatedDinerIds, intent),
+      memoryGateway.recallGroupContext(groupId, seatedDinerIds, intent),
       catalogGateway.listRestaurants(),
       loadRecommendations(tableId),
     ]);
@@ -230,6 +233,7 @@ async function computeAndPersistRecommendation(
 /** Starts a pending action's reveal window, does the real work, then writes the true settled phase. */
 async function runAction(
   tableId: string,
+  groupId: string,
   actionKind: PendingAction,
   intent: string,
   seatedDinerIds: string[],
@@ -240,7 +244,12 @@ async function runAction(
     .set({ pendingAction: actionKind, actionStartedAt: startedAt, updatedAt: startedAt })
     .where(eq(tables.id, tableId));
 
-  const { phase, errorMessage } = await computeAndPersistRecommendation(tableId, seatedDinerIds, intent);
+  const { phase, errorMessage } = await computeAndPersistRecommendation(
+    tableId,
+    groupId,
+    seatedDinerIds,
+    intent,
+  );
 
   await db
     .update(tables)
@@ -248,14 +257,24 @@ async function runAction(
     .where(eq(tables.id, tableId));
 }
 
-export async function createTable(intent: string): Promise<{ id: string }> {
+/**
+ * A signed-in diner creates a table, seating only themselves — whoever
+ * else joins does so via the shared link (joinTable below). Every table a
+ * diner creates reuses their own recurring group (Phase 5's minimal-scope
+ * "what is a group": one per table-creator, lazily created).
+ */
+export async function createTable(creatorDinerId: string, intent: string): Promise<{ id: string }> {
   const id = makeTableId();
-  const seatedDinerIds = ["alex", "sam", "jordan"];
+  const groupId = await getOrCreateGroupForDiner(creatorDinerId);
 
-  await db.insert(tables).values({ id, groupId: DEMO_GROUP_ID, intent, phase: "recalling" });
-  await db.insert(tableDiners).values(seatedDinerIds.map((dinerId) => ({ tableId: id, dinerId })));
+  await db.insert(tables).values({ id, groupId, intent, phase: "recalling" });
+  await db.insert(tableDiners).values({ tableId: id, dinerId: creatorDinerId });
+  await db
+    .insert(groupMembers)
+    .values({ groupId, dinerId: creatorDinerId })
+    .onConflictDoNothing({ target: [groupMembers.groupId, groupMembers.dinerId] });
 
-  await runAction(id, "create", intent, seatedDinerIds);
+  await runAction(id, groupId, "create", intent, [creatorDinerId]);
 
   return { id };
 }
@@ -264,8 +283,8 @@ export async function createTable(intent: string): Promise<{ id: string }> {
  * A diner opens the shared link and claims their seat. Idempotent for
  * diners already seated. Any join that happens after a recommendation
  * already exists triggers the same rebalance path used for a belief
- * revision — there is nothing Priya-specific about it now that a real
- * engine computes the recommendation for whichever diners are seated.
+ * revision. Also records them as a member of the table's group — whoever
+ * joins one of your tables becomes part of your recurring circle.
  */
 export async function joinTable(
   id: string,
@@ -274,7 +293,6 @@ export async function joinTable(
   const [row] = await db.select().from(tables).where(eq(tables.id, id));
   if (!row) return { ok: false, reason: "Table not found." };
   if (row.approved) return { ok: true };
-  if (!DEMO_DINER_IDS.includes(dinerId)) return { ok: true };
 
   const [existing] = await db
     .select()
@@ -284,32 +302,49 @@ export async function joinTable(
 
   const { current: existingRecommendation } = await loadRecommendations(id);
   await db.insert(tableDiners).values({ tableId: id, dinerId });
+  await db
+    .insert(groupMembers)
+    .values({ groupId: row.groupId, dinerId })
+    .onConflictDoNothing({ target: [groupMembers.groupId, groupMembers.dinerId] });
 
   if (existingRecommendation) {
     const seatedDinerIds = await loadSeatedDinerIds(id);
-    await runAction(id, "join", row.intent, seatedDinerIds);
+    await runAction(id, row.groupId, "join", row.intent, seatedDinerIds);
   }
 
   return { ok: true };
 }
 
 /**
- * Jordan corrects his own belief from his own device. The revision is
- * written through the real MemoryGateway (so it persists independent of
- * this table, and the previous/current pair for the audit UI comes
- * straight from the gateway's own supersession logic), then the same
- * rebalance path re-runs.
+ * A signed-in diner corrects one of their own beliefs from their own
+ * device (Phase 5 generalizes this past the demo's hardcoded "Jordan
+ * corrects to shellfish allergy" script — any seated diner, any kind,
+ * any value). The revision is written through the real MemoryGateway (so
+ * it persists independent of this table, and the previous/current pair
+ * for the audit UI comes straight from the gateway's own supersession
+ * logic), then the same rebalance path re-runs.
+ *
+ * Only one correction is shown per table at a time (`tables.lastRevision`
+ * is a single slot, matching what BeliefRevisionPanel renders) — a second
+ * attempt at the same table is a no-op, same as the original single-shot
+ * demo script.
  */
-export async function reviseJordanBelief(
+export async function reviseBelief(
   id: string,
+  dinerId: string,
+  kind: BeliefKind,
+  value: string | number,
+  correctionText: string,
 ): Promise<{ ok: true } | { ok: false; reason: string }> {
   const [row] = await db.select().from(tables).where(eq(tables.id, id));
   if (!row) return { ok: false, reason: "Table not found." };
-  if (row.approved) return { ok: true };
-  if (row.lastRevision) return { ok: true };
+  if (row.approved) return { ok: false, reason: "This table is already approved." };
+  if (row.lastRevision) return { ok: false, reason: "This table already has a correction on file." };
 
   const seatedDinerIds = await loadSeatedDinerIds(id);
-  if (!seatedDinerIds.includes("jordan")) return { ok: true };
+  if (!seatedDinerIds.includes(dinerId)) {
+    return { ok: false, reason: "You need to join this table before correcting a belief." };
+  }
 
   const startedAt = new Date();
   await db
@@ -318,15 +353,20 @@ export async function reviseJordanBelief(
     .where(eq(tables.id, id));
 
   const revision = await memoryGateway.reviseBelief({
-    dinerId: "jordan",
+    dinerId,
     sessionId: id,
-    kind: "allergy",
-    value: "shellfish",
-    correctionText: "Actually I'm allergic to shellfish.",
+    kind,
+    value,
+    correctionText,
   });
   await db.update(tables).set({ lastRevision: revision, updatedAt: new Date() }).where(eq(tables.id, id));
 
-  const { phase, errorMessage } = await computeAndPersistRecommendation(id, seatedDinerIds, row.intent);
+  const { phase, errorMessage } = await computeAndPersistRecommendation(
+    id,
+    row.groupId,
+    seatedDinerIds,
+    row.intent,
+  );
   await db.update(tables).set({ phase, errorMessage, updatedAt: new Date() }).where(eq(tables.id, id));
 
   return { ok: true };
@@ -573,9 +613,9 @@ async function loadCheckoutDisplay(
  * One diner submits their own feedback. Only allowed once fulfillment has
  * completed. Once every seated diner has responded, builds the
  * MealOutcome and writes it back through the real MemoryGateway (scoped
- * to the persistent DEMO_GROUP_ID, not this table's own id) — so a later
- * fresh-session lookup, or even a brand-new table with the same group,
- * genuinely reflects it.
+ * to this table's own group, not the table's own id) — so a later
+ * fresh-session lookup, or even a brand-new table created by the same
+ * diner, genuinely reflects it.
  */
 export async function submitFeedback(
   id: string,
@@ -617,7 +657,7 @@ export async function submitFeedback(
     if (allResponded) {
       const completedAt = new Date().toISOString();
       const outcome = buildMealOutcome({
-        groupId: DEMO_GROUP_ID,
+        groupId: row.groupId,
         recommendation,
         feedback: feedbackRows.map((f) => ({
           dinerId: f.dinerId,
@@ -689,7 +729,7 @@ export async function getTable(id: string): Promise<TableSnapshot | null> {
   ].filter((rid): rid is string => rid !== null && rid !== undefined);
 
   const [context, restaurants, checkoutDisplay, feedbackRows] = await Promise.all([
-    memoryGateway.recallGroupContext(DEMO_GROUP_ID, seatedDinerIds, row.intent),
+    memoryGateway.recallGroupContext(row.groupId, seatedDinerIds, row.intent),
     catalogGateway.getRestaurants(relevantRestaurantIds),
     loadCheckoutDisplay(id, now),
     db.select().from(tableFeedback).where(eq(tableFeedback.tableId, id)),
@@ -717,7 +757,7 @@ export async function getTable(id: string): Promise<TableSnapshot | null> {
     row.memorySavedAt && recommendation
       ? confirmFeedbackMemoryUpdate({
           outcome: buildMealOutcome({
-            groupId: DEMO_GROUP_ID,
+            groupId: row.groupId,
             recommendation,
             feedback,
             completedAt: row.memorySavedAt.toISOString(),
@@ -745,13 +785,10 @@ export async function getTable(id: string): Promise<TableSnapshot | null> {
   };
 }
 
-export async function getAllDinerProfiles(): Promise<DinerProfile[]> {
-  const context = await memoryGateway.recallGroupContext(DEMO_GROUP_ID, DEMO_DINER_IDS, "");
-  return context.diners;
-}
-
 export async function getDinerProfile(id: string): Promise<DinerProfile | null> {
-  const context = await memoryGateway.recallGroupContext(DEMO_GROUP_ID, [id], "");
+  // groupId only affects the returned `history` field (discarded below by
+  // taking just `.diners[0]`), so any value is fine here.
+  const context = await memoryGateway.recallGroupContext("", [id], "");
   return context.diners[0] ?? null;
 }
 
@@ -760,8 +797,10 @@ export async function getDinerProfile(id: string): Promise<DinerProfile | null> 
  * mock-gateway.ts's `restaurant: o.restaurantId`), not a display name.
  * Resolved here against the catalog for anything rendering this list.
  */
-export async function getGroupHistory(): Promise<GroupMealSummary[]> {
-  const context = await memoryGateway.recallGroupContext(DEMO_GROUP_ID, DEMO_DINER_IDS, "");
+export async function getGroupHistory(groupId: string): Promise<GroupMealSummary[]> {
+  // dinerIds only affects the returned `diners` field, which this function
+  // doesn't use — history is purely a function of groupId.
+  const context = await memoryGateway.recallGroupContext(groupId, [], "");
   const restaurantIds = context.history.map((meal) => meal.restaurant);
   const restaurants = await catalogGateway.getRestaurants(restaurantIds);
   const nameById = new Map(restaurants.map((r) => [r.id, r.name]));

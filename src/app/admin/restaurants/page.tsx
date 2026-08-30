@@ -1,12 +1,12 @@
 import { redirect } from "next/navigation";
+import { auth } from "@/auth";
 import { catalogGateway } from "@/features/catalog";
-import { isAdminRequest } from "@/lib/admin-auth";
 import { AdminRestaurantsClient } from "./AdminRestaurantsClient";
 
 export default async function AdminRestaurantsPage() {
-  const authorized = await isAdminRequest();
-  if (!authorized) {
-    redirect("/admin/login");
+  const session = await auth();
+  if (!session?.user?.isAdmin) {
+    redirect("/signin?callbackUrl=/admin/restaurants");
   }
 
   const restaurants = await catalogGateway.listRestaurants();

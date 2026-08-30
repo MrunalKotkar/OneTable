@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { signOut } from "next-auth/react";
 import type { Dish, Restaurant } from "@/domain/contracts";
 
 interface Props {
@@ -130,10 +131,7 @@ export function AdminRestaurantsClient({ initialRestaurants }: Props) {
       await refresh();
     });
 
-  const logout = async () => {
-    await fetch("/api/admin/logout", { method: "POST" });
-    window.location.href = "/admin/login";
-  };
+  const logout = () => signOut({ callbackUrl: "/signin" });
 
   return (
     <main>

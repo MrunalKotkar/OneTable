@@ -1,4 +1,4 @@
-import type { DinerProfile, GroupMealSummary } from "@/domain/contracts";
+import type { BeliefKind, DinerProfile, GroupMealSummary } from "@/domain/contracts";
 import type { TableSnapshot } from "@/server/table-store";
 
 export interface ActionResult {
@@ -38,12 +38,17 @@ export async function fetchTable(id: string): Promise<TableSnapshot | null> {
   return parseOrNull(res);
 }
 
-export async function joinTableRequest(id: string, dinerId: string): Promise<ActionResult> {
-  return postAction(`/api/tables/${id}/join`, { dinerId });
+export async function joinTableRequest(id: string): Promise<ActionResult> {
+  return postAction(`/api/tables/${id}/join`);
 }
 
-export async function reviseJordanRequest(id: string): Promise<ActionResult> {
-  return postAction(`/api/tables/${id}/revise-belief`);
+export async function reviseBeliefRequest(
+  id: string,
+  kind: BeliefKind,
+  value: string | number,
+  correctionText: string,
+): Promise<ActionResult> {
+  return postAction(`/api/tables/${id}/revise-belief`, { kind, value, correctionText });
 }
 
 export async function approveTableRequest(id: string): Promise<ActionResult> {
@@ -60,17 +65,10 @@ export async function payTableRequest(id: string, forceFailure = false): Promise
 
 export async function submitFeedbackRequest(
   id: string,
-  dinerId: string,
   liked: boolean,
   note?: string,
 ): Promise<ActionResult> {
-  return postAction(`/api/tables/${id}/feedback`, { dinerId, liked, note });
-}
-
-export async function fetchAllDiners(): Promise<DinerProfile[]> {
-  const res = await fetch("/api/diners", { cache: "no-store" });
-  const data = await parseOrNull<{ diners: DinerProfile[] }>(res);
-  return data?.diners ?? [];
+  return postAction(`/api/tables/${id}/feedback`, { liked, note });
 }
 
 export async function fetchDinerProfile(
@@ -78,8 +76,4 @@ export async function fetchDinerProfile(
 ): Promise<{ diner: DinerProfile; history: GroupMealSummary[] } | null> {
   const res = await fetch(`/api/diners/${id}`, { cache: "no-store" });
   return parseOrNull(res);
-}
-
-export async function resetDemo(): Promise<void> {
-  await fetch("/api/reset", { method: "POST" });
 }
