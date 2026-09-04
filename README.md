@@ -2,14 +2,9 @@
 
 **A memory powered group dining agent.** OneTable remembers what every diner in your group can and cannot eat, negotiates one order that works for everyone, and handles payment and fulfillment end to end.
 
-[![Live App](https://img.shields.io/badge/Live%20App-one--table--silk.vercel.app-black?style=for-the-badge&logo=vercel)](https://one-table-silk.vercel.app)
-![Next.js](https://img.shields.io/badge/Next.js-16-black?style=flat-square&logo=next.js)
-![React](https://img.shields.io/badge/React-19-149eca?style=flat-square&logo=react)
-![TypeScript](https://img.shields.io/badge/TypeScript-5-3178c6?style=flat-square&logo=typescript)
-![PostgreSQL](https://img.shields.io/badge/PostgreSQL-Drizzle%20ORM-4169e1?style=flat-square&logo=postgresql)
-![Stripe](https://img.shields.io/badge/Stripe-Test%20Mode-635bff?style=flat-square&logo=stripe)
+**Live app: [one-table-silk.vercel.app](https://one-table-silk.vercel.app)**
 
-**Live app:** **[https://one-table-silk.vercel.app](https://one-table-silk.vercel.app)**
+Built with Next.js, React, TypeScript, PostgreSQL, Drizzle ORM, and Stripe. See the [tech stack](#tech-stack) below for details.
 
 ---
 
