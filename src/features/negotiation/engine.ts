@@ -158,16 +158,26 @@ export function buildExplanation(diner: DinerProfile, dish: Dish): string {
 
 export function diffRecommendations(
   prev: Recommendation | undefined,
-  next: Recommendation
+  next: Recommendation,
+  diners: DinerProfile[],
+  restaurants: Restaurant[],
 ): RecommendationChange[] {
   if (!prev) return [];
 
   const changes: RecommendationChange[] = [];
 
+  // Names, not raw ids, in the summaries shown to diners. Falls back to the
+  // id itself if a lookup misses (e.g. a diner who's since left the table,
+  // or a restaurant no longer in the candidate list) rather than throwing.
+  const dinerName = (id: string) => diners.find((d) => d.id === id)?.name ?? id;
+  const restaurantName = (id: string) => restaurants.find((r) => r.id === id)?.name ?? id;
+  const dishName = (id: string) =>
+    restaurants.flatMap((r) => r.menu).find((dish) => dish.id === id)?.name ?? id;
+
   if (prev.restaurantId !== next.restaurantId) {
     changes.push({
       kind: "restaurant",
-      summary: `Restaurant changed from ${prev.restaurantId} to ${next.restaurantId}`,
+      summary: `Restaurant changed from ${restaurantName(prev.restaurantId)} to ${restaurantName(next.restaurantId)}`,
     });
   }
 
@@ -183,20 +193,20 @@ export function diffRecommendations(
     if (!prevSelection) {
       changes.push({
         kind: "member",
-        summary: `${dinerId} joined the order`,
+        summary: `${dinerName(dinerId)} joined the order`,
       });
       continue;
     }
     if (prevSelection.dishId !== nextSelection.dishId) {
       changes.push({
         kind: "dish",
-        summary: `${dinerId}'s dish changed from ${prevSelection.dishId} to ${nextSelection.dishId}`,
+        summary: `${dinerName(dinerId)}'s dish changed from ${dishName(prevSelection.dishId)} to ${dishName(nextSelection.dishId)}`,
       });
     }
     if (prevSelection.price !== nextSelection.price) {
       changes.push({
         kind: "price",
-        summary: `${dinerId}'s price changed from ${prevSelection.price} to ${nextSelection.price}`,
+        summary: `${dinerName(dinerId)}'s price changed from $${prevSelection.price} to $${nextSelection.price}`,
       });
     }
   }
@@ -205,7 +215,7 @@ export function diffRecommendations(
     if (!nextByDiner.has(dinerId)) {
       changes.push({
         kind: "member",
-        summary: `${dinerId} left the order`,
+        summary: `${dinerName(dinerId)} left the order`,
       });
     }
   }
@@ -276,7 +286,7 @@ export class RuleBasedNegotiationEngine implements NegotiationEngine {
       changes: [],
     };
 
-    next.changes = diffRecommendations(previousRecommendation, next);
+    next.changes = diffRecommendations(previousRecommendation, next, context.diners, restaurants);
 
     return next;
   }
