@@ -85,7 +85,7 @@ Accounts needed, gathered up front so there are no surprises:
 - **You'll need**: a Stripe test-mode secret key and (after the webhook endpoint exists on a deployed URL) the webhook signing secret from the Stripe dashboard.
 
 ### Phase 7 — Deploy to Vercel + smoke test
-- Connect the repo to Vercel, provision Postgres, set all env vars (`DATABASE_URL`, `AUTH_SECRET`, `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `NEXT_PUBLIC_APP_URL`), run migrations + catalog seed against the production DB.
+- Connect the repo to Vercel, provision Postgres, set all env vars (`DATABASE_URL`, `AUTH_SECRET`, `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `APP_URL` — server-only, deliberately not `NEXT_PUBLIC_APP_URL`), run migrations + catalog seed against the production DB.
 - Register the Stripe webhook against the real deployed URL.
 - Gate or remove `POST /api/reset` in production (currently wipes all state with no auth check).
 - Full smoke test on the live URL: sign up → create table → join → approve → pay with Stripe's `4242 4242 4242 4242` test card → confirm the webhook fires and fulfillment starts → leave feedback → confirm a fresh session shows persisted history.

@@ -10,7 +10,7 @@ interface StripeLineItemInput {
 }
 
 export const isStripeConfigured = () =>
-  Boolean(process.env.STRIPE_SECRET_KEY && process.env.NEXT_PUBLIC_APP_URL);
+  Boolean(process.env.STRIPE_SECRET_KEY && process.env.APP_URL);
 
 /**
  * Test-mode-only, enforced: this app never handles real money, so a
@@ -32,11 +32,18 @@ export const getStripe = () => {
   return new Stripe(secretKey);
 };
 
+/**
+ * Server-only — this is the app's own base URL, used to build Stripe's
+ * success_url/cancel_url. It never runs in the browser, so it's plain
+ * `APP_URL`, not `NEXT_PUBLIC_APP_URL`: the NEXT_PUBLIC_ prefix tells
+ * Next.js to inline the value into the client JS bundle, which this value
+ * never needs and Vercel rightly flags as an unnecessary exposure.
+ */
 export const getAppUrl = () => {
-  const appUrl = process.env.NEXT_PUBLIC_APP_URL;
+  const appUrl = process.env.APP_URL;
 
   if (!appUrl) {
-    throw new Error("NEXT_PUBLIC_APP_URL is not configured.");
+    throw new Error("APP_URL is not configured.");
   }
 
   return appUrl.replace(/\/$/, "");
